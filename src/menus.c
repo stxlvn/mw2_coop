@@ -1832,6 +1832,9 @@ static void tick_f(void)
 		if (game_dvar_raw("mw2coop_icontest", icontest, sizeof(icontest)) && icontest[0] == '1') { // QA: does the text draw take an inline material ("^\x01" w h length name)?
 			size_t n = strlen(line);
 			snprintf(line + n, sizeof(line) - n, " [^\x01\x20\x20\x11pc_keyboard_mouse]");
+			static int logged;
+			if (!logged++)
+				log_printf("menus: icon test hint (%zu chars): %s", strlen(line), line);
 		}
 		localize_override("MENU_SP_STEAM_CHAT_HINT", line);
 		hint_shown = 1;

@@ -62,6 +62,9 @@
 //   bodycam  - (native split screen) player 1 looks at player 2, who is turned four ways and then
 //              by his pad: player 2's body must face where his camera looks; the composed picture
 //              of each (both halves) is saved through the dvar mw2coop_qa_frame
+//   glyphs   - (trainer, native split screen, [native] p1pad=<n>) each player gets a hint naming a
+//              key ("[{+gostand}]"): player 2 on a pad sees the button's picture, player 1 the key;
+//              the composed picture is saved as "glyphs" (src/padglyphs.c)
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -301,6 +304,12 @@ main()
 			break;
 		case "bodycam":
 			bodycam();
+			break;
+		case "glyphs":
+			glyphs();
+			break;
+		case "armed":
+			armed();
 			break;
 		default:
 			report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );
@@ -3549,5 +3558,61 @@ bodycam()
 	wait 0.5;
 	SetDvar( "mw2coop_qa_frame", "bodycam-pad" );
 	report( "player 2 turned by his pad: view yaw " + int( p2 GetPlayerAngles()[ 1 ] ) + ", body yaw " + int( p2.angles[ 1 ] ) );
+	report( "done" );
+}
+
+// a hint naming a key for each player (see the list at the top)
+glyphs()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	if ( !flag_exist( "introscreen_complete" ) || !flag( "introscreen_complete" ) )
+		level waittill_notify_or_timeout( "introscreen_complete", 30 );
+	wait 3;
+	foreach ( player in level.players )
+	{
+		hint = NewClientHudElem( player );
+		hint.x = 0;
+		hint.y = 60;
+		hint.alignX = "center";
+		hint.alignY = "middle";
+		hint.horzAlign = "center";
+		hint.vertAlign = "middle";
+		hint.fontScale = 1.6;
+		hint.font = "default";
+		hint SetText( &"TRAINER_HINT_STAND" );
+	}
+	wait 2;
+	SetDvar( "mw2coop_qa_frame", "glyphs" );
+	wait 1;
+	report( "done" );
+}
+
+// both players armed and facing each other 150 units apart ([native] entdump=1 logs the entity
+// slots: which fields carry a body's weapon); the composed picture is saved as "armed"
+armed()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	if ( !flag_exist( "introscreen_complete" ) || !flag( "introscreen_complete" ) )
+		level waittill_notify_or_timeout( "introscreen_complete", 30 );
+	wait 2;
+	foreach ( player in level.players )
+	{
+		player GiveWeapon( "m4_grunt" );
+		player SwitchToWeapon( "m4_grunt" );
+	}
+	p1 = level.player;
+	p2 = level.player2;
+	yaw = p1 GetPlayerAngles()[ 1 ];
+	ahead = p1.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 150;
+	p2 SetOrigin( PlayerPhysicsTrace( ahead + ( 0, 0, 48 ), ahead - ( 0, 0, 96 ) ) );
+	for ( t = 0; t < 160; t++ )
+	{
+		p1 SetPlayerAngles( VectorToAngles( p2 GetEye() - ( 0, 0, 20 ) - p1 GetEye() ) );
+		p2 SetPlayerAngles( VectorToAngles( p1 GetEye() - ( 0, 0, 20 ) - p2 GetEye() ) );
+		if ( t == 100 )
+			SetDvar( "mw2coop_qa_frame", "armed" );
+		wait 0.05;
+	}
+	report( "player 1 holds " + p1 GetCurrentWeapon() + ", player 2 " + p2 GetCurrentWeapon() );
 	report( "done" );
 }

@@ -20,6 +20,7 @@
 #include "localize.h"
 #include "native.h"
 #include "padopts.h"
+#include "padglyphs.h"
 #include "rumble.h"
 #include "shot.h"
 
@@ -3433,6 +3434,22 @@ static void own_write_hook(unsigned lc)
 	static int on = -1;
 	if (on < 0)
 		on = cfg("ownpos", 1);
+	if ((ctx_current == 0 || ctx_current == 1) && CFG_ONCE("entdump", 0)) { // QA: the cg_entities slots 0 and 1 of each context, as dwords (which fields carry a body's weapon)
+		static DWORD at[2];
+		static int dumps[2];
+		if (split_tick && GetTickCount() - split_tick >= (DWORD)CFG_ONCE("entdump", 0) * 1000 && GetTickCount() - at[ctx_current] >= 3000 && dumps[ctx_current] < 6) {
+			at[ctx_current] = GetTickCount();
+			dumps[ctx_current]++;
+			for (int k = 0; k < 2; k++) {
+				const uint32_t *d = (const uint32_t *)(base + 0x441070 + (size_t)k * 0x1a8);
+				char line[1400];
+				int n = snprintf(line, sizeof(line), "native: entdump ctx %d ent %d:", ctx_current, k);
+				for (int i = 0; i < 0x1a8 / 4 && n < (int)sizeof(line) - 12; i++)
+					n += snprintf(line + n, sizeof(line) - n, " %x", d[i]);
+				log_printf("%s", line);
+			}
+		}
+	}
 	if (ctx_current == 1 && CFG_ONCE("pslog", 0)) {
 		static unsigned seen;
 		if (++seen % 60 == 1 && seen < 4000) {
@@ -3958,6 +3975,17 @@ static cmd_function_t native_commands[] = {
 	{NULL, "mw2coop_native_launch", NULL, NULL, native_launch_f CMD_NODE_FLAG},
 };
 
+// For padglyphs.c: the player whose half's texts are being made (his context live), if he plays on a pad; *tactical: his layout
+static int text_pad_player(int *tactical)
+{
+	if (!native_active || ctx_current < 0 || ctx_current > 1 || pad_dev[ctx_current] < 0)
+		return -1;
+	padopts_t o;
+	padopts_get(ctx_current, &o);
+	*tactical = o.tactical;
+	return ctx_current;
+}
+
 void native_install(void)
 {
 	char path[MAX_PATH];
@@ -3970,6 +3998,7 @@ void native_install(void)
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	for (size_t i = 0; i < sizeof(native_commands) / sizeof(native_commands[0]); i++)
 		game_add_command(&native_commands[i]);
+	padglyphs_install(text_pad_player);
 	// the QA runs: settings.ini [native] players=2 starts the session at once (the menu's button does it later, native_split_start)
 	int players = cfg("players", 0);
 	if (players >= 2)
