@@ -357,10 +357,20 @@ screenshots on one PC (`MW2COOP_LOBBY=1 sh tools/qa_native.sh 150`), not played 
    2026-10-28, owner on trainer: in the bottom half the FAR models (NPCs, vehicles, distant scenery) jump to the right and back, near ones are fine; with `set r_forceLod high` the jumps
    are gone, so it is the level-of-detail choice (probably state shared by both views, the other context's camera picks another LOD). r_forceLod (dvar at rva 0x4116460) is read in
    rva 0xdd90, the place to start. PARKED by the owner until players report it.
+   FIXED 2026-10-28 (the LOD idea was wrong: r_forceLod high only hid it by chance; with it the jumps came back in bursts). The renderer's worker threads (command types at rva
+   0x370340: "add scene ent", "skin model", the cell/dpvs/shadow entities) finish a frame's scene while the client goes on, reading the cgame entities and skeletons through
+   pointers into the live client statics; a context swap rewrote them under the workers, so the bottom half's far NPCs were skinned with context 0's data for a frame (they
+   jumped into another pose and place, about one bottom frame in four). Proof: gone with r_smp_worker 0, not with r_smp_backend 0. Fix: `ctx_wait_workers` before every swap
+   runs the engine's own wait for a worker command type (rva 0x300a0) for types 0-18 ([native] workerwait=0 off). Checked: 0 jumps in 4 bursts of 20 bottom frames (2-3 per
+   burst before), owner confirmed live. QA tools of the hunt: `!burst <prefix>` / `!burstfull <prefix>` (frames kept in video memory, saved after the last, no stall per
+   frame) and [native] burstat/burstevery/burstcount/burstfull, counted in composed frames; [native] jumplog=1, timelog2=1; [native] hangwatch (thread stacks after 10 s
+   without a cgame frame: it also fires during a mission briefing video, which is not a hang).
 4a. DONE 2026-10-28 (owner's choice "variant 2"): the split comes 0.25 s into the level, under the title's black screen (`split_view_gate`; the slam zoom levels keep one picture
    until it has landed). The title lines (maps\_introscreen patch: sort 1.0078125) are drawn by context 0 alone with the full-screen 2D placement (`hudelem_hook`, rva 0xa3b80) and the
    rows of its layer below its half are laid over the bottom half (`overlay_titles`): one copy, single-player size and place. The layer comparison (`dedupe`) is off by default: it cut
    holes in the black screen both halves hold the same, and the texts it was for are drawn by one context each now. Checked on trainer frames (lines, dissolve, fade).
+   A half not composed yet is filled black: on the split's second frame the bottom rows of the back buffer were context 0's whole view without its 2D (the title's black
+   screen had gone to the layer), a one-frame flash of the level (owner, 2026-10-28; bursts of the first frames: black now).
 5. The second player joins too late: he must appear right after the loading and the black title screen (the context 1 starts ~5 frames after the first cgame draw, but the split switches on after the intro, and in
    Contingency the first minute shows one picture: check what is slow).
 6. Weapon switch for the second player by pad: no bindable "weapnext" found; a script `SwitchToWeapon` is overridden by his usercmd.

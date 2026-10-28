@@ -6,6 +6,7 @@
 // switches it on; with 2 the second view is turned around (yaw + 180) to show that the views are drawn separately. 64-bit only for now.
 #define COBJMACROS
 #include <windows.h>
+#include <tlhelp32.h>
 #include <math.h>
 #include <d3d9.h>
 #include <stdarg.h>
@@ -487,10 +488,16 @@ static void compose(IDirect3DDevice9 *dev, int half)
 		}
 		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
 		RECT bottom = {0, (LONG)(d.Height / 2), (LONG)d.Width, (LONG)d.Height};
+		// a half not composed yet (the split's first frame of the other context) is black: the back buffer's own rows there are this frame's whole view without its 2D,
+		// which flashed the level through the title's black screen for a frame
 		if (comp_have[0])
 			IDirect3DDevice9_StretchRect(dev, comp_surf[0], NULL, back, &top, D3DTEXF_NONE);
+		else
+			IDirect3DDevice9_ColorFill(dev, back, &top, 0xff000000);
 		if (comp_have[1])
 			IDirect3DDevice9_StretchRect(dev, comp_surf[1], NULL, back, &bottom, D3DTEXF_NONE);
+		else
+			IDirect3DDevice9_ColorFill(dev, back, &bottom, 0xff000000);
 		IDirect3DSurface9_Release(back);
 		return;
 	}
@@ -632,6 +639,25 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 		char name[32];
 		snprintf(name, sizeof(name), "seq-%ld", (long)pops);
 		shot_save_now(dev, name);
+	}
+	{ // QA: [native] burstat=<pops>: frames in a row without a stall per frame, "b<k>-NN.bmp"; burstn (40) frames of the bottom half (burstfull=1: 30 whole frames),
+	  // burstcount (1) bursts, burstevery (600) composed frames apart. Counted in composed frames, so a slow level start does not move them.
+		static LONG burst_at = -2, every, count;
+		static int full;
+		if (burst_at == -2) {
+			burst_at = cfg("burstat", -1), every = cfg("burstevery", 600), count = cfg("burstcount", 1), full = cfg("burstfull", 0);
+			if (every < 1)
+				every = 1;
+		}
+		if (burst_at >= 0 && pops >= burst_at && (pops - burst_at) % every == 0 && (pops - burst_at) / every < count) {
+			char name[16];
+			snprintf(name, sizeof(name), "b%ld", (long)((pops - burst_at) / every));
+			if (full)
+				shot_burst_start(name, 30, 0, 0, (int)comp_w, (int)comp_h);
+			else
+				shot_burst_start(name, cfg("burstn", 40), 0, (int)(comp_h / 2), (int)comp_w, (int)(comp_h / 2));
+		}
+		shot_burst_tick(dev);
 	}
 	if (pops % 300 == 0)
 		log_printf("native: %ld frames composed via %d, presents %ld/%ld/%ld, %ld views queued, queue %ld", (long)pops, via, (long)present_hits[0],
@@ -1465,11 +1491,28 @@ static void ctx_ensure(void)
 #define CTX_ALL ((1u << NRANGES) - 1)
 #define CTX_CL (1u << 5)
 #define CTX_CL_CLC ((1u << 5) | (1u << 6))
+// The renderer's worker threads finish a frame's scene while the client goes on (types at rva 0x370340: "add scene ent", "skin model", the cell and shadow entities...):
+// they read the cgame's entities and the skeletons through pointers into the live client statics. A swap rewrote those under them, and the bottom half's far NPCs were
+// skinned with context 0's data for a frame (2026-10-28: gone with r_smp_worker 0, not with r_smp_backend 0). Before a swap, the engine's own wait for a type of worker
+// command (rva 0x300a0: it helps the workers until the type's count of commands in flight is 0) runs for types 0-18; 19 and 20 are physics ([native] workerwait=0 off).
+static void ctx_wait_workers(void)
+{
+	static int on = -1;
+	if (on < 0)
+		on = cfg("workerwait", 1);
+	if (!on)
+		return;
+	void (*wait_type)(int) = (void (*)(int))(base + 0x300a0);
+	for (int t = 0; t <= 18; t++)
+		wait_type(t);
+}
+
 static void ctx_swap_mask(int to, unsigned mask)
 {
 	if (to == ctx_current)
 		return;
 	ctx_ensure();
+	ctx_wait_workers();
 	for (size_t i = 0; i < NRANGES; i++) {
 		if (!(mask & (1u << i)))
 			continue;
@@ -1632,9 +1675,100 @@ static void run_both(void (*fn)(void))
 		ctx_swap(was);
 }
 
+// Hang watch ([native] hangwatch=0 off): after a level's cgame init, when no frame comes for 10 s, or frames stop for 6 s once they came, every other thread of the game is
+// stopped for a moment and its instruction pointer and the code addresses on its stack are logged (module+offset), once per hang. The threads run again before anything is logged.
+static volatile LONG hang_frames; // frames that reached the draw hooks (draw_hook)
+static volatile DWORD hang_init_tick;
+static void hang_dump(const char *why)
+{
+	DWORD self = GetCurrentThreadId(), pid = GetCurrentProcessId();
+	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+	if (snap == INVALID_HANDLE_VALUE)
+		return;
+	static char lines[24][1400];
+	int nl = 0;
+	THREADENTRY32 te;
+	te.dwSize = sizeof(te);
+	for (BOOL ok = Thread32First(snap, &te); ok && nl < 24; ok = Thread32Next(snap, &te)) {
+		if (te.th32OwnerProcessID != pid || te.th32ThreadID == self)
+			continue;
+		HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
+		if (!th)
+			continue;
+		uint64_t addrs[40];
+		int na = 0;
+		if (SuspendThread(th) != (DWORD)-1) {
+			CONTEXT ctx;
+			memset(&ctx, 0, sizeof(ctx));
+			ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+			if (GetThreadContext(th, &ctx)) {
+				addrs[na++] = ctx.Rip;
+				const uint64_t *sp = (const uint64_t *)ctx.Rsp;
+				for (int i = 0; i < 600 && na < 40; i++) {
+					uint64_t v = 0;
+					if (!ReadProcessMemory(GetCurrentProcess(), sp + i, &v, sizeof(v), NULL))
+						break;
+					MEMORY_BASIC_INFORMATION mbi;
+					if (v > 0x10000 && VirtualQuery((void *)(uintptr_t)v, &mbi, sizeof(mbi)) && mbi.Type == MEM_IMAGE &&
+					    (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
+						addrs[na++] = v;
+				}
+			}
+			ResumeThread(th);
+		}
+		CloseHandle(th);
+		int n = snprintf(lines[nl], sizeof(lines[nl]), "native: HANG (%s) thread %lu:", why, (unsigned long)te.th32ThreadID);
+		for (int i = 0; i < na && n < (int)sizeof(lines[nl]) - 60; i++) {
+			HMODULE m = NULL;
+			char name[MAX_PATH] = "?";
+			if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)(uintptr_t)addrs[i], &m) && m) {
+				GetModuleFileNameA(m, name, sizeof(name));
+				const char *slash = strrchr(name, '\\');
+				n += snprintf(lines[nl] + n, sizeof(lines[nl]) - n, " %s+%llx", slash ? slash + 1 : name, (unsigned long long)(addrs[i] - (uintptr_t)m));
+			}
+		}
+		nl++;
+	}
+	CloseHandle(snap);
+	for (int i = 0; i < nl; i++)
+		log_printf("%s", lines[i]);
+}
+static DWORD WINAPI hang_watch_thread(LPVOID unused)
+{
+	(void)unused;
+	LONG last = -1;
+	DWORD since = GetTickCount();
+	int dumped = 0;
+	for (;;) {
+		Sleep(1000);
+		DWORD now = GetTickCount();
+		LONG f = hang_frames;
+		if (f != last) {
+			last = f, since = now, dumped = 0;
+			continue;
+		}
+		if (dumped || !hang_init_tick)
+			continue;
+		if (f == 0 && now - hang_init_tick > 10000) // (hang_frames is zeroed at each cgame init)
+			dumped = 1, hang_dump("no frame 10 s after the cgame init");
+		else if (f > 0 && now - since > 6000)
+			dumped = 1, hang_dump("no frame for 6 s");
+	}
+	return 0;
+}
+
 static void cg_init_all_hook(void)
 {
 	log_printf("native: cgame init (context 0; context 1 follows after the first frames), dvar ptr 0x52bfc0 = %p", *(void **)(base + 0x52bfc0));
+	{
+		static int started;
+		if (!started && cfg("hangwatch", 1)) {
+			started = 1;
+			CreateThread(NULL, 0, hang_watch_thread, NULL, 0, NULL);
+		}
+		hang_frames = 0;
+		hang_init_tick = GetTickCount();
+	}
 	cg_init_all_original();
 	cg_init_done = 1;
 	if (native_active) { // a new level: context 1 starts again from this level's cgame
@@ -1742,6 +1876,7 @@ static void time_log(void)
 static void ctx_after_draw(void)
 {
 	static int texts_done;
+	InterlockedIncrement(&hang_frames);
 	time_log();
 	if (!texts_done) { // both players are on this machine: the co-op "waiting for the other player" texts have nothing to wait for (an asset lookup: not while the level is loading)
 		texts_done = 1;
@@ -2022,7 +2157,8 @@ static void place_push(void)
 		p[18] = 0, p[19] = 0, p[20] = vw, p[21] = 480.0f;
 		p[22] = 0, p[23] = 0, p[24] = w, p[25] = h;
 	}
-	if (!place_pushed)
+	static int logged; // (once: hudelem_hook pops and pushes them around each title line, every frame)
+	if (!place_pushed && !logged++)
 		log_printf("native: the 2D placements are made for a %gx%g half (scale %g)", w, h, s);
 	place_pushed = 1;
 }
@@ -2679,6 +2815,24 @@ static void (*pass2_original)(unsigned);
 static const uint8_t pass2_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x68, 0x18, 0x56, 0x57, 0x41, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00};
 static void pass2_hook(unsigned lc)
 {
+	{ // [native] timelog2=1: each context's cgame time (rva 0x422434) at its entity pass, the two side by side every 120 frames and whenever they are more than 50 ms apart
+		static int tl = -1;
+		static int last_t[2];
+		static unsigned n, logged;
+		if (tl < 0)
+			tl = cfg("timelog2", 0);
+		if (tl && (ctx_current == 0 || ctx_current == 1)) {
+			int t = *(const int *)(base + 0x422434);
+			int was = last_t[ctx_current];
+			last_t[ctx_current] = t;
+			if (ctx_current == 1 && last_t[0] && abs(t - last_t[0]) > 50 && logged < 200)
+				logged++, log_printf("native: entity pass time ctx1 %d ctx0 %d (diff %d)", t, last_t[0], t - last_t[0]);
+			if (was && t < was && logged < 200)
+				logged++, log_printf("native: entity pass time of ctx %d went back %d -> %d", ctx_current, was, t);
+			if (++n % 120 == 0)
+				log_printf("native: entity pass times ctx0 %d ctx1 %d", last_t[0], last_t[1]);
+		}
+	}
 	static int on = -1;
 	if (on < 0)
 		on = cfg("p0copy", 1) && cfg("ownfix", 1);
@@ -2711,6 +2865,29 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			}
 		}
 		(void)frame;
+	}
+	{ // [native] jumplog=1: an entity whose drawn origin (the pose at +0x18 of rdx) moves more than 16 units from one add to the next in the same context is logged (the far
+	  // models' jumps in the bottom half: in the data the cgame hands over, or later in the renderer)
+		static int jl = -1;
+		static float last[2][1024][3];
+		static uint8_t have[2][1024];
+		static unsigned logged;
+		if (jl < 0)
+			jl = cfg("jumplog", 0);
+		unsigned k = c & 0xffff;
+		if (jl && (ctx_current == 0 || ctx_current == 1) && k >= 2 && k < 1024 && b) {
+			const float *o = (const float *)((const uint8_t *)b + 0x18);
+			float *l = last[ctx_current][k];
+			if (have[ctx_current][k]) {
+				float dx = o[0] - l[0], dy = o[1] - l[1], dz = o[2] - l[2], d = dx * dx + dy * dy + dz * dz;
+				if (d > 256.0f && logged < 400) {
+					logged++;
+					log_printf("native: jump ctx %d ent %u by %.1f: %.1f %.1f %.1f -> %.1f %.1f %.1f", ctx_current, k, sqrtf(d), l[0], l[1], l[2], o[0], o[1], o[2]);
+				}
+			}
+			l[0] = o[0], l[1] = o[1], l[2] = o[2];
+			have[ctx_current][k] = 1;
+		}
 	}
 	{ // [native] dobjcount=1: counts only (no per-call lines, they change the timing): context 1's adds of entities 0 and 1, by where they are drawn
 		static int cnt_on = -1;

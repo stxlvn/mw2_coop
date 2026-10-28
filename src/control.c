@@ -15,6 +15,7 @@
 //   !menus            -> QA: log the names of the menus the UI has loaded
 //   !menuitems <menu> -> QA: log a menu's open/close scripts and its items
 //   !shot <name>      -> QA: save this machine's next frame as mw2coop\shots\<name>.bmp (shot.c)
+//   !burst <prefix>   -> QA: 40 frames in a row of the bottom half, <prefix>-NN.bmp (shot.c, the native split screen); !burstfull: 30 whole frames
 //   # comment
 #include <windows.h>
 #include <stdint.h>
@@ -368,6 +369,14 @@ static void run_line(char *line)
 	}
 	if (strncmp(line, "!shot ", 6) == 0) {
 		shot_request(line + 6);
+		return;
+	}
+	if (strncmp(line, "!burst ", 7) == 0) { // !burst <prefix>: 40 frames in a row of the bottom half of a 1920x1080 picture (the native split screen's QA)
+		shot_burst_start(line + 7, 40, 0, 540, 1920, 540);
+		return;
+	}
+	if (strncmp(line, "!burstfull ", 11) == 0) { // !burstfull <prefix>: 30 whole 1920x1080 frames in a row
+		shot_burst_start(line + 11, 30, 0, 0, 1920, 1080);
 		return;
 	}
 	if (strcmp(line, "!party") == 0) {

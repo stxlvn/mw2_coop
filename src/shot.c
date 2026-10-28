@@ -94,6 +94,63 @@ void shot_save_now(void *dev, const char *name)
 	save((IDirect3DDevice9 *)dev, name);
 }
 
+#define BURST_MAX 48
+static IDirect3DSurface9 *burst[BURST_MAX];
+static int burst_n, burst_i;
+static RECT burst_r;
+static char burst_prefix[32];
+
+void shot_burst_start(const char *prefix, int n, int x, int y, int w, int h)
+{
+	if (burst_n)
+		return;
+	lstrcpynA(burst_prefix, prefix, sizeof(burst_prefix));
+	burst_r.left = x, burst_r.top = y, burst_r.right = x + w, burst_r.bottom = y + h;
+	burst_i = 0;
+	burst_n = n < BURST_MAX ? n : BURST_MAX;
+}
+
+void shot_burst_tick(void *devp)
+{
+	IDirect3DDevice9 *dev = (IDirect3DDevice9 *)devp;
+	if (!burst_n)
+		return;
+	IDirect3DSurface9 *back = NULL;
+	D3DSURFACE_DESC desc;
+	if (FAILED(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back)))
+		return;
+	IDirect3DSurface9_GetDesc(back, &desc);
+	int w = burst_r.right - burst_r.left, h = burst_r.bottom - burst_r.top;
+	if (burst_i < burst_n) {
+		if (!burst[burst_i] && FAILED(IDirect3DDevice9_CreateRenderTarget(dev, w, h, desc.Format, D3DMULTISAMPLE_NONE, 0, FALSE, &burst[burst_i], NULL))) {
+			log_printf("shot: burst stopped at %d (no video memory)", burst_i);
+			burst_n = burst_i;
+		} else if (SUCCEEDED(IDirect3DDevice9_StretchRect(dev, back, &burst_r, burst[burst_i], NULL, D3DTEXF_NONE))) {
+			burst_i++;
+		}
+	}
+	IDirect3DSurface9_Release(back);
+	if (burst_i < burst_n)
+		return;
+	for (int i = 0; i < burst_n; i++) { // all in: to system memory and to the disk
+		IDirect3DSurface9 *sys = NULL;
+		D3DLOCKED_RECT rect;
+		if (SUCCEEDED(IDirect3DDevice9_CreateOffscreenPlainSurface(dev, w, h, desc.Format, D3DPOOL_SYSTEMMEM, &sys, NULL)) &&
+		    SUCCEEDED(IDirect3DDevice9_GetRenderTargetData(dev, burst[i], sys)) && SUCCEEDED(IDirect3DSurface9_LockRect(sys, &rect, NULL, D3DLOCK_READONLY))) {
+			char path[MAX_PATH];
+			snprintf(path, sizeof(path), "%s%s-%02d.bmp", dir, burst_prefix, i);
+			write_bmp(path, rect.pBits, rect.Pitch, w, h);
+			IDirect3DSurface9_UnlockRect(sys);
+		}
+		if (sys)
+			IDirect3DSurface9_Release(sys);
+		IDirect3DSurface9_Release(burst[i]);
+		burst[i] = NULL;
+	}
+	log_printf("shot: burst %s: %d frames (%dx%d)", burst_prefix, burst_n, w, h);
+	burst_n = burst_i = 0;
+}
+
 static HRESULT STDMETHODCALLTYPE end_scene_hook(IDirect3DDevice9 *dev)
 {
 	if (pending[0]) {
