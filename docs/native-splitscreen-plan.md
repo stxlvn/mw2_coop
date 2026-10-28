@@ -354,6 +354,9 @@ screenshots on one PC (`MW2COOP_LOBBY=1 sh tools/qa_native.sh 150`), not played 
    0x93e2f) gives it an empty name in context 1. Player 2's name: [native] p2name, else the profile's name + " (2)" (rva 0xd3110 gives the profile's name for every client).
 3. The "Follow" waypoint hint of the objective must show in both halves (only the top one has it; the bottom context does not draw it).
 4. The helicopters of the mission before the Gulag move jerkily back and forth: not investigated; suspects: moving state outside the swapped ranges stepped by both contexts, or the entity cleanup.
+   2026-10-28, owner on trainer: in the bottom half the FAR models (NPCs, vehicles, distant scenery) jump to the right and back, near ones are fine; with `set r_forceLod high` the jumps
+   are gone, so it is the level-of-detail choice (probably state shared by both views, the other context's camera picks another LOD). r_forceLod (dvar at rva 0x4116460) is read in
+   rva 0xdd90, the place to start. PARKED by the owner until players report it.
 5. The second player joins too late: he must appear right after the loading and the black title screen (the context 1 starts ~5 frames after the first cgame draw, but the split switches on after the intro, and in
    Contingency the first minute shows one picture: check what is slow).
 6. Weapon switch for the second player by pad: no bindable "weapnext" found; a script `SwitchToWeapon` is overridden by his usercmd.
