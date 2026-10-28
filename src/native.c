@@ -2499,6 +2499,68 @@ static void msgwin_hook(int lc, int window, int x, int y, int horz, int vert, vo
 	msgwin_original(lc, window, x, y, horz, vert, font, scale, color, style, align, how);
 }
 
+// The names over the other players (rva 0x93ac0, the loop at 0x93d90 over clients 0 and 1): a client is skipped when it is the drawing local client ("CMP EBP,EAX" at 0x93db3).
+// Context 1 is not player 2 to that test, so the bottom half had no name over player 1. The 17 bytes from 0x93daa go to a stub that does the same test, but in context 1 the
+// client skipped is player 2 (itself): it names player 1 ([native] namefix=0 off).
+static const uint8_t name_self_bytes[] = {0x8b, 0xc7, 0x84, 0xc9, 0x74, 0x03, 0x0f, 0xb7, 0x06, 0x3b, 0xe8, 0x0f, 0x84, 0x21, 0x01, 0x00, 0x00};
+static void name_self_install(void)
+{
+	uint8_t *site = base + 0x93daa;
+	if (memcmp(site, name_self_bytes, sizeof(name_self_bytes))) {
+		log_printf("native: name loop bytes differ");
+		return;
+	}
+	uint8_t code[64];
+	size_t n = 0;
+	static const uint8_t head[] = {0x8b, 0xc7, 0x84, 0xc9, 0x74, 0x03, 0x0f, 0xb7, 0x06, 0x52, 0x48, 0xba}; // mov eax,edi; test cl,cl; jz +3; movzx eax,word [rsi]; push rdx; mov rdx,imm64
+	memcpy(code + n, head, sizeof(head));
+	n += sizeof(head);
+	uint64_t at = (uint64_t)(uintptr_t)&ctx_current;
+	memcpy(code + n, &at, 8);
+	n += 8;
+	// cmp dword [rdx],1; pop rdx; jne +5; cmp eax,1 (context 1: the client to skip is player 2); jmp +2; cmp ebp,eax (otherwise the drawing local client); jz +14 (the second jump)
+	static const uint8_t mid[] = {0x83, 0x3a, 0x01, 0x5a, 0x75, 0x05, 0x83, 0xf8, 0x01, 0xeb, 0x02, 0x3b, 0xe8, 0x74, 0x0e};
+	memcpy(code + n, mid, sizeof(mid));
+	n += sizeof(mid);
+	hook_jump_bytes(code + n, base + 0x93dbb); // not this client: the name is drawn
+	n += 14;
+	hook_jump_bytes(code + n, base + 0x93edc); // this client: the next one
+	n += 14;
+	uint8_t *stub = hook_code(code, n);
+	if (!stub) {
+		log_printf("native: no page for the name loop stub");
+		return;
+	}
+	jhook_jump(site, sizeof(name_self_bytes), stub, 0x90);
+}
+
+// The name the loop shows comes from rva 0xd3110, which outside the engine's co-op gives the profile's name for every client: player 2 got player 1's name. The call at 0x93e2f
+// gets player 2's from [native] p2name, by default the profile's name with " (2)" after it, the way the console names a second player on one profile.
+static const char *(*name_get_original)(int);
+static const char *name_get_hook(int client)
+{
+	static char p2[64], v[48];
+	static unsigned gen, logged;
+	const char *own = name_get_original(client);
+	if (native_active && client >= 0 && client < 2 && !(logged & (1u << (client * 2 + ctx_current)))) { // once per client and context: whose name each half draws
+		logged |= 1u << (client * 2 + ctx_current);
+		log_printf("native: name over client %d drawn in context %d", client, ctx_current);
+	}
+	if (client != 1 || !native_active)
+		return own;
+	if (ctx_current == 1) // the loop takes client 1 for a remote one when the local player count it reads is 1 (it never reaches the test above): no name over player 2 in his own half
+		return "";
+	if (gen != cfg_gen) { // read once per session
+		GetPrivateProfileStringA("native", "p2name", "", v, sizeof(v), settings_path);
+		gen = cfg_gen;
+	}
+	if (v[0])
+		snprintf(p2, sizeof(p2), "%s", v);
+	else
+		snprintf(p2, sizeof(p2), "%.40s (2)", own ? own : "");
+	return p2;
+}
+
 // The cgame's second per-entity pass (rva 0xb0680) draws every entity that is not "mine". In context 1, with ownfix, the other player is entity 0, whose slot holds a copy
 // of player 2's own data there (it is filled from the player state): for the call it gets player 1's entity as context 0 holds it.
 // Player 1's entity data for context 1's slot 0: origin and angles of the pose (+0x18..0x30) and the entity states (+0x60..0x170, and +0x178 on) from context 0,
@@ -2876,6 +2938,11 @@ static void contexts_install(void)
 			log_printf("native: local slot function bytes differ");
 		if (!jhook_function(base + 0xcb4f0, msgwin_bytes, sizeof(msgwin_bytes), msgwin_hook, (void **)&msgwin_original))
 			log_printf("native: game message window draw bytes differ");
+		if (cfg("namefix", 1)) {
+			name_self_install();
+			if (!jhook_call(base + 0x93e2f, name_get_hook, (void **)&name_get_original))
+				log_printf("native: no call at the name loop's name lookup");
+		}
 	}
 	p1pad = cfg("p1pad", -1);
 	skip_hud_mask = cfg("skiphud", 0);

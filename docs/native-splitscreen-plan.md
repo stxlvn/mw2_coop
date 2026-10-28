@@ -350,6 +350,9 @@ screenshots on one PC (`MW2COOP_LOBBY=1 sh tools/qa_native.sh 150`), not played 
    around the compass, seen on snow. Alpha-only draws now keep the game's own blending (fixed 2026-10-28, checked on trainer frames while walking).
    Still open: in the scope the compass and the ammo counter must be hidden behind the scope's black overlay (they show over it when moving or firing). Check the draw order in the layer
    (the scene's 2D pass 0x63680 and the final list 0x5c010 are drawn into the same layer in that order) and the original game's behaviour (plain game: `MW2COOP_PLAIN=1`, aim, walk, `!shot`).
+3a. DONE 2026-10-28: names over the partner in both halves. rva 0x93ac0 draws them for clients 0 and 1 and skips "self" (CMP EBP,EAX at 0x93db3); context 1 skipped player 1.
+   A stub at 0x93daa (`name_self_install`) skips player 2 in context 1; client 1 is never tested as local there (the local player count it reads is 1), so `name_get_hook` (the call at
+   0x93e2f) gives it an empty name in context 1. Player 2's name: [native] p2name, else the profile's name + " (2)" (rva 0xd3110 gives the profile's name for every client).
 3. The "Follow" waypoint hint of the objective must show in both halves (only the top one has it; the bottom context does not draw it).
 4. The helicopters of the mission before the Gulag move jerkily back and forth: not investigated; suspects: moving state outside the swapped ranges stepped by both contexts, or the entity cleanup.
 5. The second player joins too late: he must appear right after the loading and the black title screen (the context 1 starts ~5 frames after the first cgame draw, but the split switches on after the intro, and in
