@@ -53,6 +53,13 @@ static void register_dvars(void)
 			dvars[pl][o] = o == OPT_SENS ? reg_float(names[pl][o], opts[o].def, 1.0f, 10.0f, DVAR_ARCHIVE, opts[o].description)
 						     : reg_bool(names[pl][o], opts[o].def != 0, DVAR_ARCHIVE, opts[o].description);
 		}
+	log_printf("padopts: gamepad options registered (sensitivity %.1f / %.1f)", dvars[0][OPT_SENS]->current.value, dvars[1][OPT_SENS]->current.value);
+}
+
+// the aim_* dvars are registered with the cgame (a level's start), after the main menu: checked on every tick
+static void unlock_aim_dvars(void)
+{
+	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	int unlocked = 0;
 	for (uint32_t rva = RVA_AIM_DVARS; rva < RVA_AIM_DVARS_END; rva += 8) {
 		dvar_t *d = *(dvar_t **)(base + rva);
@@ -61,8 +68,8 @@ static void register_dvars(void)
 			unlocked++;
 		}
 	}
-	log_printf("padopts: gamepad options registered (sensitivity %.1f / %.1f), %d aim assist dvars unlocked", dvars[0][OPT_SENS]->current.value,
-		   dvars[1][OPT_SENS]->current.value, unlocked);
+	if (unlocked)
+		log_printf("padopts: %d aim assist dvars unlocked", unlocked);
 }
 
 void padopts_get(int player, padopts_t *out)
@@ -224,6 +231,7 @@ static void patch_controls(void)
 void padopts_tick(void)
 {
 	register_dvars();
+	unlock_aim_dvars();
 	add_page(0);
 	add_page(1);
 	patch_controls();

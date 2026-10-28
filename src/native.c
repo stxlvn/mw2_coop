@@ -978,7 +978,13 @@ static volatile LONG rt_full; // the current render target (stage 0) is as big a
 static HRESULT STDMETHODCALLTYPE t_scissor(IDirect3DDevice9 *dev, const RECT *r)
 {
 	RECT fixed;
-	if (r && mode == 10 && native_active && split_on && !layer_pass && rt_full && comp_h && r->bottom <= (LONG)(comp_h / 2) && r->right - r->left > 64) {
+	if (r && mode == 10 && native_active && split_on && CFG_ONCE("scissorlog", 0)) { // QA: the scissor rectangles of split frames
+		static LONG logged;
+		if (!layer_pass && rt_full && comp_h && r->bottom <= (LONG)(comp_h / 2) && r->right - r->left > 64 && InterlockedIncrement(&logged) < 400)
+			log_printf("native: scissor %ld,%ld %ld,%ld layer %d full %d", (long)r->left, (long)r->top, (long)r->right, (long)r->bottom, layer_pass, (int)rt_full);
+	}
+	if (r && mode == 10 && native_active && split_on && !layer_pass && rt_full && comp_h && r->bottom <= (LONG)(comp_h / 2) && r->right - r->left > 64 &&
+	    CFG_ONCE("lensfix", 1)) {
 		if (r->right - r->left < (LONG)(comp_w / 2))
 			frame_scope = 1; // a lens rectangle: the frame being drawn looks through a scope (its half is known once the scene's 2D pass is reached)
 		fixed = *r;
@@ -993,21 +999,54 @@ static HRESULT STDMETHODCALLTYPE t_scissor(IDirect3DDevice9 *dev, const RECT *r)
 static dpup_t dpup_orig;
 static dipup_t dipup_orig;
 static scene_t begin_scene_orig, end_scene_orig;
+// Mode 10: the scene's last pass (rva 0x63680, see scene2d_hook) also draws 3D things with the depth test on: effects, particles, the glass and the dot of a red dot
+// sight (the dot is a bone of the gun's model, tag_reticle_red_dot). Into the layer they came out where the half's 2D is laid out (the dot below the layer's rows,
+// the glass and the snow as a veil over the top half), so a depth-tested draw of that pass goes to the half's picture with the 3D instead ([native] layer3d=0: as before)
+static IDirect3DSurface9 *layer_scene_rt, *layer_rt;
+static int layer_to_scene(IDirect3DDevice9 *dev)
+{
+	if (!layer_scene_rt || !layer_rt || !CFG_ONCE("layer3d", 1))
+		return 0;
+	DWORD z = 0;
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_ZENABLE, &z);
+	if (!z)
+		return 0;
+	D3DVIEWPORT9 vp;
+	IDirect3DDevice9_GetViewport(dev, &vp);
+	set_rt_orig(dev, 0, layer_scene_rt);
+	viewport_orig(dev, &vp);
+	return 1;
+}
+static void layer_back(IDirect3DDevice9 *dev)
+{
+	D3DVIEWPORT9 vp;
+	IDirect3DDevice9_GetViewport(dev, &vp);
+	set_rt_orig(dev, 0, layer_rt);
+	viewport_orig(dev, &vp);
+}
 static HRESULT STDMETHODCALLTYPE t_dpup(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, UINT pc, const void *v, UINT st)
 {
-	if (layer_pass)
+	int moved = layer_pass ? layer_to_scene(dev) : 0;
+	if (layer_pass && !moved)
 		layer_fix(dev);
 	if (trace_on)
 		trace_draw(dev);
-	return dpup_orig(dev, t, pc, v, st);
+	HRESULT hr = dpup_orig(dev, t, pc, v, st);
+	if (moved)
+		layer_back(dev);
+	return hr;
 }
 static HRESULT STDMETHODCALLTYPE t_dipup(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, UINT mi, UINT nv, UINT pc, const void *i, D3DFORMAT f, const void *v, UINT st)
 {
-	if (layer_pass)
+	int moved = layer_pass ? layer_to_scene(dev) : 0;
+	if (layer_pass && !moved)
 		layer_fix(dev);
 	if (trace_on)
 		trace_draw(dev);
-	return dipup_orig(dev, t, mi, nv, pc, i, f, v, st);
+	HRESULT hr = dipup_orig(dev, t, mi, nv, pc, i, f, v, st);
+	if (moved)
+		layer_back(dev);
+	return hr;
 }
 static HRESULT STDMETHODCALLTYPE t_set_rt(IDirect3DDevice9 *dev, DWORD i, IDirect3DSurface9 *s)
 {
@@ -1053,19 +1092,27 @@ static HRESULT STDMETHODCALLTYPE t_viewport(IDirect3DDevice9 *dev, const D3DVIEW
 }
 static HRESULT STDMETHODCALLTYPE t_dip(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, INT bv, UINT mi, UINT nv, UINT si, UINT pc)
 {
-	if (layer_pass)
+	int moved = layer_pass ? layer_to_scene(dev) : 0;
+	if (layer_pass && !moved)
 		layer_fix(dev);
 	if (trace_on)
 		trace_draw(dev);
-	return dip_orig(dev, t, bv, mi, nv, si, pc);
+	HRESULT hr = dip_orig(dev, t, bv, mi, nv, si, pc);
+	if (moved)
+		layer_back(dev);
+	return hr;
 }
 static HRESULT STDMETHODCALLTYPE t_dp(IDirect3DDevice9 *dev, D3DPRIMITIVETYPE t, UINT sv, UINT pc)
 {
-	if (layer_pass)
+	int moved = layer_pass ? layer_to_scene(dev) : 0;
+	if (layer_pass && !moved)
 		layer_fix(dev);
 	if (trace_on)
 		trace_draw(dev);
-	return dp_orig(dev, t, sv, pc);
+	HRESULT hr = dp_orig(dev, t, sv, pc);
+	if (moved)
+		layer_back(dev);
+	return hr;
 }
 static HRESULT STDMETHODCALLTYPE t_begin(IDirect3DDevice9 *dev)
 {
@@ -1174,9 +1221,11 @@ static void scene2d_hook(void *vp)
 	IDirect3DDevice9_SetRenderTarget(dev, 0, lay_surf[half]);
 	IDirect3DDevice9_Clear(dev, 0, NULL, D3DCLEAR_TARGET, 0, 1.0f, 0);
 	lay_have[half] = 1;
+	layer_scene_rt = old, layer_rt = lay_surf[half];
 	layer_pass = 1;
 	scene2d_original(vp);
 	layer_pass = 0;
+	layer_scene_rt = layer_rt = NULL;
 	IDirect3DDevice9_SetRenderTarget(dev, 0, old);
 	if (old)
 		IDirect3DSurface9_Release(old);
@@ -2698,6 +2747,13 @@ static void client_frame_hook(void)
 	if (nogun && gun_dvar)
 		*(int *)(gun_dvar + 0x10) = 1;
 	pad_frame_player(0, 1);
+	if (native_active) { // the menu tick does not run in a level: the pause menu's Options > Controls gets the gamepad pages from here (a level load may reload the menus)
+		static DWORD opts_at;
+		if (GetTickCount() - opts_at >= 1000) {
+			opts_at = GetTickCount();
+			padopts_tick();
+		}
+	}
 	if (!(mode >= 5 && ctx1_ready && split_on))
 		pad_frame_player(1, 0); // one picture: player 2's pad still works the menus
 	if (split_on && ctx1_ready)

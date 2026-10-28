@@ -1828,6 +1828,11 @@ static void tick_f(void)
 			if (d == DEVICE_NONE)
 				break; // player 2 is asked once player 1 has his device
 		}
+		char icontest[8] = "";
+		if (game_dvar_raw("mw2coop_icontest", icontest, sizeof(icontest)) && icontest[0] == '1') { // QA: does the text draw take an inline material ("^\x01" w h length name)?
+			size_t n = strlen(line);
+			snprintf(line + n, sizeof(line) - n, " [^\x01\x20\x20\x11pc_keyboard_mouse]");
+		}
 		localize_override("MENU_SP_STEAM_CHAT_HINT", line);
 		hint_shown = 1;
 	} else if (split_mode && instance_pad() < 0) {
