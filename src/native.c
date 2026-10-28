@@ -732,10 +732,11 @@ static DWORD WINAPI watchdog_thread(LPVOID unused)
 
 // ---- diagnostics ([native] d3dtrace=1): the render thread's calls of one frame (render targets, viewports, clears, stretches, draw counts), to see where the 3D ends and the 2D begins
 static int trace_on;
-static char trace_buf[40000];
+static char trace_buf[400000];
+static int trace_layer = -1; // [native] tracelayer=1: only the 2D pass's draws are traced
 static int trace_len, trace_draws;
 static IDirect3DDevice9 *trace_dev;
-static char trace_key[96], trace_key_last[96], trace_stack[160], trace_stack_last[160];
+static char trace_key[192], trace_key_last[192], trace_stack[160], trace_stack_last[160];
 static int bb_pass, bb_pass_done, bb_draws;
 static void trace_flush_draws(void)
 {
@@ -748,12 +749,23 @@ static void trace_draw(IDirect3DDevice9 *dev)
 {
 	IDirect3DVertexShader9 *vs = NULL;
 	IDirect3DPixelShader9 *ps = NULL;
-	DWORD z = 0, zw = 0, ab = 0;
+	if (trace_layer < 0)
+		trace_layer = cfg("tracelayer", 0);
+	if (trace_layer && !layer_pass)
+		return;
+	DWORD z = 0, zw = 0, ab = 0, sb = 0, db = 0, sep = 0, sba = 0, dba = 0, cw = 0, sc = 0;
 	IDirect3DDevice9_GetVertexShader(dev, &vs);
 	IDirect3DDevice9_GetPixelShader(dev, &ps);
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_ZENABLE, &z);
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_ZWRITEENABLE, &zw);
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &ab);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &sb);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &db);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, &sep);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLENDALPHA, &sba);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLENDALPHA, &dba);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_COLORWRITEENABLE, &cw);
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_SCISSORTESTENABLE, &sc);
 	if (bb_pass && !bb_pass_done && bb_draws % 60 == 0 && bb_draws > 0) { // what the picture holds after this many draws of the pass that ends with the screen copy
 		char name[24];
 		trace_on = 0;
@@ -762,7 +774,9 @@ static void trace_draw(IDirect3DDevice9 *dev)
 		trace_on = 1;
 	}
 	bb_draws++;
-	snprintf(trace_key, sizeof(trace_key), "vs=%p ps=%p z=%lu zw=%lu blend=%lu", (void *)vs, (void *)ps, (unsigned long)z, (unsigned long)zw, (unsigned long)ab);
+	snprintf(trace_key, sizeof(trace_key), "vs=%p ps=%p z=%lu zw=%lu blend=%lu %lu/%lu sep=%lu %lu/%lu cw=%lx sc=%lu%s", (void *)vs, (void *)ps, (unsigned long)z, (unsigned long)zw,
+		 (unsigned long)ab, (unsigned long)sb, (unsigned long)db, (unsigned long)sep, (unsigned long)sba, (unsigned long)dba, (unsigned long)cw, (unsigned long)sc,
+		 layer_pass ? " LAYER" : "");
 	if (vs)
 		IDirect3DVertexShader9_Release(vs);
 	if (ps)
@@ -812,11 +826,13 @@ static const char *trace_surf(IDirect3DDevice9 *dev, IDirect3DSurface9 *s)
 // inverse source alpha" for the alpha channel alone makes the layer a proper premultiplied picture (blending states 206-208 are ones the engine never sets itself).
 static void layer_fix(IDirect3DDevice9 *dev)
 {
-	DWORD on = 0, src = 0, dst = 0;
+	DWORD on = 0, src = 0, dst = 0, cw = 0xf;
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_ALPHABLENDENABLE, &on);
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_SRCBLEND, &src);
 	IDirect3DDevice9_GetRenderState(dev, D3DRS_DESTBLEND, &dst);
-	if (!on) {
+	IDirect3DDevice9_GetRenderState(dev, D3DRS_COLORWRITEENABLE, &cw);
+	if (!on || !(cw & 7)) { // a draw that writes alpha alone builds a mask for the next ones (the compass: a rectangle, multiplied by its round edge, then the map drawn by that
+		// destination alpha): its own blending must reach the alpha, or the multiply is lost and the map covers the whole rectangle (a dark square around the compass)
 		IDirect3DDevice9_SetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, 0);
 	} else if (dst == D3DBLEND_INVSRCALPHA && (src == D3DBLEND_SRCALPHA || src == D3DBLEND_ONE)) { // "over": the alpha of the layer accumulates as coverage
 		IDirect3DDevice9_SetRenderState(dev, D3DRS_SEPARATEALPHABLENDENABLE, 1);
@@ -2468,6 +2484,21 @@ static unsigned local_slot_hook(unsigned lc)
 	}
 }
 
+// Mode 10: the game message windows (rva 0x52f348, outside the swapped ranges: one set, local client 0's) are drawn by both contexts, so their texts came in both halves and
+// the layer comparison left a ghost of them. The HUD's draw of a game message window (rva 0xcb4f0: local client, window, x, y, ...) draws window 2 (console channel
+// "subtitle") in the bottom half only, window 0 ("gamenotify obituary", top left) in the top half only ([native] subonce=0 off).
+static const uint8_t msgwin_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x57, 0x48, 0x83, 0xec, 0x70};
+static void (*msgwin_original)(int, int, int, int, int, int, void *, float, const float *, int, int, int); // x and y come in integer registers (r8d, r9d)
+static void msgwin_hook(int lc, int window, int x, int y, int horz, int vert, void *font, float scale, const float *color, int style, int align, int how)
+{
+	static int on = -1;
+	if (on < 0)
+		on = cfg("subonce", 1);
+	if (on && mode == 10 && native_active && split_on && ((window == 2 && ctx_current == 0) || (window == 0 && ctx_current == 1)))
+		return;
+	msgwin_original(lc, window, x, y, horz, vert, font, scale, color, style, align, how);
+}
+
 // The cgame's second per-entity pass (rva 0xb0680) draws every entity that is not "mine". In context 1, with ownfix, the other player is entity 0, whose slot holds a copy
 // of player 2's own data there (it is filled from the player state): for the call it gets player 1's entity as context 0 holds it.
 // Player 1's entity data for context 1's slot 0: origin and angles of the pose (+0x18..0x30) and the entity states (+0x60..0x170, and +0x178 on) from context 0,
@@ -2843,6 +2874,8 @@ static void contexts_install(void)
 			log_printf("native: own entity write bytes differ");
 		if (!jhook_function(base + 0xa5ec0, slot_bytes, sizeof(slot_bytes), local_slot_hook, (void **)&slot_original))
 			log_printf("native: local slot function bytes differ");
+		if (!jhook_function(base + 0xcb4f0, msgwin_bytes, sizeof(msgwin_bytes), msgwin_hook, (void **)&msgwin_original))
+			log_printf("native: game message window draw bytes differ");
 	}
 	p1pad = cfg("p1pad", -1);
 	skip_hud_mask = cfg("skiphud", 0);

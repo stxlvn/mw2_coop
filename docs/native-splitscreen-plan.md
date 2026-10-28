@@ -342,10 +342,13 @@ screenshots on one PC (`MW2COOP_LOBBY=1 sh tools/qa_native.sh 150`), not played 
 - Sound listener: only context 0 sets it (hook at rva 0xbd2c5).
 
 ### Open (owner's list, 2026-10-27)
-1. Subtitles must be switched off in the top half completely, always (not only in the scope): the layer comparison still leaves a faint ghost in fades and in shadows. Idea: force-kill a band
-   of the bottom 20% of the top layer always (not "same as the other half"); or find the game message window draw (the console channel "subtitle", windows `con_gameMsgWindow%d*`) and skip it in
-   context 0. The 11 HUD parts hooked so far (`skiphud` bits) are not it.
-2. In the scope the compass and the ammo counter must be hidden behind the scope's black overlay (they show over it when moving or firing, with a dark backing). Check the draw order in the layer
+1. DONE 2026-10-28: subtitles once, in the bottom half, no ghost. The game message windows (rva 0x52f348, outside the swapped ranges, so one set that both contexts draw) are drawn by
+   rva 0xcb4f0 (local client, window, x, y as ints in r8d/r9d, ...); window 2 is the channel "subtitle" (default filters at rva 0x3bf1f0: "gamenotify obituary", "boldgame", "subtitle", "").
+   `msgwin_hook` draws window 2 in context 1 only and window 0 (the notices at the top left, e.g. a new objective) in context 0 only (`subonce=0` off). Checked on trainer frames.
+2. The dark backing was the compass's mask: it writes a rectangle into the alpha alone (blending off, colour write 8), multiplies it by its round edge (ZERO/SRCALPHA, colour write 8),
+   then draws its map by destination alpha (DESTALPHA/INVDESTALPHA). `layer_fix` forced "keep the alpha" on the multiply, so the map covered the whole rectangle: a dark square
+   around the compass, seen on snow. Alpha-only draws now keep the game's own blending (fixed 2026-10-28, checked on trainer frames while walking).
+   Still open: in the scope the compass and the ammo counter must be hidden behind the scope's black overlay (they show over it when moving or firing). Check the draw order in the layer
    (the scene's 2D pass 0x63680 and the final list 0x5c010 are drawn into the same layer in that order) and the original game's behaviour (plain game: `MW2COOP_PLAIN=1`, aim, walk, `!shot`).
 3. The "Follow" waypoint hint of the objective must show in both halves (only the top one has it; the bottom context does not draw it).
 4. The helicopters of the mission before the Gulag move jerkily back and forth: not investigated; suspects: moving state outside the swapped ranges stepped by both contexts, or the entity cleanup.

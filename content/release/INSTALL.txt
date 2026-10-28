@@ -41,6 +41,16 @@ https://github.com/stxlvn/mw2_coop
 (Правило брандмауэра, если его добавлял мод: "Call of Duty MW2 co-op (mw2coop)".)
 Проблемы: приложите mw2coop\mw2coop.log обоих игроков.
 
+ЭКСПЕРИМЕНТАЛЬНО: встроенный разделённый экран (две половины одного окна, один ПК)
+Это пререлиз с экспериментальной сборкой: кроме сетевой игры в нём есть режим "РАЗДЕЛЕНИЕ ЭКРАНА" для двух игроков
+на одном компьютере. Он сырой и может падать; для обычной игры по сети он не нужен.
+Как запустить: Кампания -> РАЗДЕЛЕНИЕ ЭКРАНА. Откроется лобби: первый игрок играет на клавиатуре и мыши, второй
+нажимает любую кнопку на своём геймпаде (нужен XInput-геймпад). Затем "Старт".
+Экран режется на две половины сверху и снизу; к концу миссии или при выходе в меню режим выключается.
+Известные проблемы: смена оружия вторым игроком только крестовиной;
+звук один на двоих; игра может не закрываться сама после выхода
+(закройте её в диспетчере задач); только 64-битная сборка. Если что-то не так, приложите mw2coop\mw2coop.log.
+
 === English ===
 
 Two-player co-op for the MW2 (2009) campaign on the current 64-bit Steam build. Beta: every set
@@ -68,6 +78,16 @@ network: the host's router opens the port itself if UPnP is on; otherwise forwar
 28960, or use Radmin VPN. The port can be changed in mw2coop\settings.ini (the same on both PCs).
 
 Uninstall: delete winmm.dll and the mw2coop folder from the game folder. Problems: attach mw2coop\mw2coop.log from both players.
+
+EXPERIMENTAL: the built-in split screen (two halves of one window, one PC)
+This prerelease carries an experimental build: besides online co-op it has a SPLIT SCREEN mode for two players on one
+computer. It is rough and may crash; online play does not need it.
+To start it: Campaign -> SPLIT SCREEN. The lobby opens: the first player uses keyboard and mouse, the second presses any
+button on their gamepad (an XInput gamepad). Then Start. The screen is cut into a top
+and a bottom half; the mode switches itself off when you are back in the menus.
+Known issues: the second player can only use a gamepad and switches weapons with the d-pad only; one sound listener;
+the game may not close by itself after quitting (end it in Task Manager);
+64-bit build only. If something is wrong, attach mw2coop\mw2coop.log.
 
 Not affiliated with or endorsed by Activision or Infinity Ward. mw2coop's own code is MIT
 licensed (LICENSE.txt). No game files are included.

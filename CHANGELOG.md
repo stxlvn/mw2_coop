@@ -9,8 +9,9 @@ picture cut top and bottom like the Xbox 360 version: each half has its own view
 the console's split screen), its own weapon, ammo and compass, and text that keeps its proportions. The second player
 presses any button on his gamepad in the lobby; the first one keeps keyboard and mouse. The mission starts as a normal
 level in this process, the session ends when you are back in the menus. Pause, the objectives, the briefing and the
-console show one full-size picture. Texts that belong to both (the objective, subtitles, the mission title lines)
-appear once, in the top half.
+console show one full-size picture. Texts that belong to both are shown once: the notices at the top left (a new
+objective) in the top half, the subtitles and the mission title lines in the bottom half. The compass has no dark
+square around it.
 
 How: the game's own two-player machinery runs with two client states swapped per frame; the scene's 2D is drawn into
 a layer per half and laid over the squeezed view; the game's 2D placement is made for a half. Details and the research:

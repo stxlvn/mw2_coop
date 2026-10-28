@@ -25,7 +25,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	if [ -z "${MW2COOP_MENU:-}" ] && [ -z "${MW2COOP_LOBBY:-}" ] && [ -z "${MW2COOP_PLAIN:-}" ]; then
 		echo "players=2"
 		echo "coopdvar=1"
-		echo "experiment=${MW2COOP_MODE:-8}"
+		echo "experiment=${MW2COOP_MODE:-10}"
 		echo "fov=${MW2COOP_FOV:-49}"
 		echo "p1cmd=1"
 		echo "listplayers=1"
