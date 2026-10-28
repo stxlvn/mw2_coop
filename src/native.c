@@ -19,6 +19,8 @@
 #include "log.h"
 #include "localize.h"
 #include "native.h"
+#include "padopts.h"
+#include "rumble.h"
 #include "shot.h"
 
 #ifdef _WIN64
@@ -675,6 +677,14 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 				shot_burst_start(name, cfg("burstn", 40), 0, (int)(comp_h / 2), (int)comp_w, (int)(comp_h / 2));
 		}
 		shot_burst_tick(dev);
+	}
+	if (pops % 4 == 0) { // QA: a level script sets the dvar mw2coop_qa_frame to a new name: the composed picture (both halves) is saved as that name
+		static char last[64];
+		char name[64];
+		if (game_dvar_raw("mw2coop_qa_frame", name, sizeof(name)) && name[0] && strcmp(name, last)) {
+			lstrcpynA(last, name, sizeof(last));
+			shot_save_now(dev, name);
+		}
 	}
 	if (pops % 300 == 0)
 		log_printf("native: %ld frames composed via %d, presents %ld/%ld/%ld, %ld views queued, queue %ld", (long)pops, via, (long)present_hits[0],
@@ -1487,6 +1497,7 @@ static const range_t ranges[] = {
     {0x533d20, 0x540b60 - 0x533d20}, // cl: usercmd ring, cmdNumber, playerstate, packet history
     {0x545844, 0x3218},              // clc: reliable command ring
     {0x548ce8, 8},                   // the snapshot message's time and flag
+    {0x3cf180, 0xe80},               // aim assist of local client 0 (aaGlob: the targets on screen, the aim_* regions): each context's cgame fills its own
 };
 #define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
 static uint8_t *ctx_store[2][NRANGES];
@@ -2006,7 +2017,7 @@ typedef struct {
 	int active;         // the pad is connected
 	WORD held;
 	int rt, lt;
-	DWORD last_tick;
+	LONGLONG last_count; // the performance counter at the last frame (the turn is per second)
 	WORD menu_held;
 	DWORD menu_repeat; // when a held direction in a menu sends its key again
 } pad_player_t;
@@ -2061,6 +2072,7 @@ static void pad_stick(float *x, float *y, float dead, float curve)
 	*y = *y / m * n;
 }
 
+static int qa_noassist[2];
 static int pad_read(int pl, xin_state_t *st)
 {
 	if (!xinput_get) {
@@ -2105,6 +2117,18 @@ static int pad_read(int pl, xin_state_t *st)
 			st->pad.buttons = (WORD)f[pl][4], st->pad.lt = (BYTE)f[pl][5], st->pad.rt = (BYTE)f[pl][6];
 			have = 1;
 		}
+		// QA: the dvar mw2coop_qa_pad1 / mw2coop_qa_pad2, same format, stands in for the pad too: a level script presses at the moment it wants. An eighth
+		// value 1 turns the aim assist off meanwhile (a script cannot write the option's dvar: the engine refuses script writes to code dvars)
+		char name[24], v[96];
+		int g[8] = {0};
+		snprintf(name, sizeof(name), "mw2coop_qa_pad%d", pl + 1);
+		qa_noassist[pl] = 0;
+		if (game_dvar_raw(name, v, sizeof(v)) && sscanf(v, "%d %d %d %d %d %d %d %d", &g[0], &g[1], &g[2], &g[3], &g[4], &g[5], &g[6], &g[7]) >= 7) {
+			st->pad.lx = (SHORT)g[0], st->pad.ly = (SHORT)g[1], st->pad.rx = (SHORT)g[2], st->pad.ry = (SHORT)g[3];
+			st->pad.buttons = (WORD)g[4], st->pad.lt = (BYTE)g[5], st->pad.rt = (BYTE)g[6];
+			qa_noassist[pl] = g[7] != 0;
+			have = 1;
+		}
 	}
 	return have;
 }
@@ -2143,6 +2167,151 @@ static void pad_menu(int pl, const xin_state_t *st)
 	p->menu_held = b;
 }
 
+// ---- aim assist for a pad player, the console game's: this PC build left its code out but keeps its data. The cgame fills a list of the targets on the screen
+// each frame (aaGlob[0], rva 0x3cf180, by rva 0x6a570 from the view at 0xbd2c5; one per context: it is in the swapped ranges), and the mouse move (0xcfcf0) computes
+// the regions of the aim_* dvars into it (0x6a350, before its auto melee 0x685c0). On that list, like the console: the turn slows down over a target (aim_slowdown_*),
+// the view stays on a target while the player moves (aim_lockon_*), and aiming down the sight turns onto the nearest target in the auto aim region (aim_autoaim_*).
+// The weapon's ranges: BG_GetWeaponDef (rva 0x85850) +0x42c aim assist range, +0x430 the same aiming down the sight, +0x428 auto aim range.
+#define AA_GLOB 0x3cf180
+typedef struct {
+	int ent;
+	float mins[2], maxs[2]; // its box on the screen, -1..1 around the cross hair
+	float pos[3];           // where to aim (a tag of it)
+	float vel[3];
+	float dist2;  // squared distance from the eye
+	float xhair2; // squared distance from the cross hair on the screen
+} aa_target_t;        // 0x34 bytes, from +0x13c, the count at +0xe3c
+typedef struct {
+	int lock_ent, snap_ent, ads_was;
+	float snap_t;
+	float lock_yaw, lock_pitch; // the direction to the lock-on target at the last frame
+} aa_state_t;
+static aa_state_t aa_state[2] = {{-1, -1, 0, 0, 0, 0}, {-1, -1, 0, 0, 0, 0}};
+
+static float aa_dvar(uint32_t rva) // the aim_* dvar pointers: rva 0x3cf050 .. 0x3cf178 (registered by 0x69a60)
+{
+	const dvar_t *d = *(const dvar_t **)(base + rva);
+	return !d ? 0.0f : d->type == DVAR_TYPE_BOOL ? (float)d->current.enabled : d->current.value;
+}
+
+static void aa_angles(const float eye[3], const float pos[3], float *pitch, float *yaw)
+{
+	float d[3] = {pos[0] - eye[0], pos[1] - eye[1], pos[2] - eye[2]};
+	*yaw = atan2f(d[1], d[0]) * 57.2957795f;
+	*pitch = -atan2f(d[2], sqrtf(d[0] * d[0] + d[1] * d[1])) * 57.2957795f; // down is positive
+}
+
+static float aa_delta(float to, float from)
+{
+	return fmodf(to - from + 540.0f, 360.0f) - 180.0f;
+}
+
+// the target nearest the cross hair whose screen box meets the region (half width / height around the cross hair, the screen being -1..1) within range
+static const aa_target_t *aa_pick(const uint8_t *aa, float hw, float hh, float range)
+{
+	int n = *(const int *)(aa + 0xe3c);
+	const aa_target_t *t = (const aa_target_t *)(aa + 0x13c), *best = NULL;
+	for (int i = 0; i < n && i < 64; i++) {
+		if (t[i].dist2 > range * range || hw < t[i].mins[0] || t[i].maxs[0] < -hw || hh < t[i].mins[1] || t[i].maxs[1] < -hh)
+			continue;
+		if (!best || t[i].xhair2 < best->xhair2)
+			best = &t[i];
+	}
+	return best;
+}
+
+static const aa_target_t *aa_find(const uint8_t *aa, int ent)
+{
+	int n = *(const int *)(aa + 0xe3c);
+	const aa_target_t *t = (const aa_target_t *)(aa + 0x13c);
+	for (int i = 0; i < n && i < 64; i++)
+		if (t[i].ent == ent)
+			return &t[i];
+	return NULL;
+}
+
+// yaw, pitch: this frame's turn from the stick, in the accumulators' senses (yaw left, pitch down positive); move, look: the sticks' deflections (0..1); ads: aiming
+static void aim_assist(int pl, float dt, float *yaw, float *pitch, float move, float look, int ads)
+{
+	aa_state_t *s = &aa_state[pl];
+	const uint8_t *aa = base + AA_GLOB;
+	int ads_was = s->ads_was;
+	s->ads_was = ads;
+	int weapon = *(const int *)(aa + 0x24);
+	const uint8_t *wd = aa[0xb0] && weapon > 0 ? ((const uint8_t *(*)(int64_t))(base + 0x85850))(weapon) : NULL;
+	if (!wd) {
+		s->lock_ent = s->snap_ent = -1;
+		return;
+	}
+	const float ads_lerp = *(const float *)(aa + 0x128);
+	const float range = (*(const float *)(wd + 0x42c) * (1.0f - ads_lerp) + *(const float *)(wd + 0x430) * ads_lerp) * aa_dvar(0x3cf050);
+	float auto_range = *(const float *)(wd + 0x428) * aa_dvar(0x3cf058);
+	if (auto_range <= 0) // this PC build's weapons have no auto aim range: their aim assist range then
+		auto_range = range;
+	const float *eye = (const float *)(aa + 0xd8), *view = (const float *)(aa + 0xf0);
+	const float *region = (const float *)(aa + 0xb8); // half width and height: slowdown, auto aim, auto melee, lock-on
+	const float stick_yaw = *yaw, stick_pitch = *pitch;
+	const aa_target_t *slow = aa_dvar(0x3cf0b0) != 0 ? aa_pick(aa, region[0], region[1], range) : NULL;
+	if (slow) { // the turn slows down over a target
+		*yaw *= aa_dvar(0x3cf0e0) * (1.0f - ads_lerp) + aa_dvar(0x3cf0e8) * ads_lerp;
+		*pitch *= aa_dvar(0x3cf0d0) * (1.0f - ads_lerp) + aa_dvar(0x3cf0d8) * ads_lerp;
+	}
+	// lock-on: while a stick is pushed, the view follows (aim_lockon_strength of) the angle by which the direction to the target turned since the last frame, as the
+	// player or the target moved; a jump (a teleport) is not followed
+	const float deflection = aa_dvar(0x3cf158);
+	const aa_target_t *lock = aa_dvar(0x3cf148) != 0 && (move > deflection || look > deflection) ? aa_pick(aa, region[6], region[7], range) : NULL;
+	float lock_yaw = 0, lock_pitch = 0;
+	if (lock) {
+		float p, y, k = aa_dvar(0x3cf160);
+		aa_angles(eye, lock->pos, &p, &y);
+		if (lock->ent == s->lock_ent) {
+			lock_yaw = aa_delta(y, s->lock_yaw) * k, lock_pitch = aa_delta(p, s->lock_pitch) * k;
+			if (fabsf(lock_yaw) > 5.0f || fabsf(lock_pitch) > 5.0f)
+				lock_yaw = lock_pitch = 0;
+			*yaw += lock_yaw, *pitch += lock_pitch;
+		}
+		s->lock_yaw = y, s->lock_pitch = p;
+	}
+	s->lock_ent = lock ? lock->ent : -1;
+	// aiming down the sight turns onto the target nearest the cross hair in the auto aim region, at aim_autoaim_lerp degrees a second, for half a second at most
+	if (ads && !ads_was && aa_dvar(0x3cf0f0) != 0) {
+		const aa_target_t *t = aa_pick(aa, region[2], region[3], auto_range);
+		s->snap_ent = t ? t->ent : -1;
+		s->snap_t = 0;
+	}
+	float snap_yaw = 0, snap_pitch = 0;
+	const aa_target_t *snap = ads && s->snap_ent >= 0 ? aa_find(aa, s->snap_ent) : NULL;
+	if (snap && s->snap_t < 0.5f) {
+		float tp, ty, step = aa_dvar(0x3cf100) * dt;
+		aa_angles(eye, snap->pos, &tp, &ty);
+		snap_yaw = aa_delta(ty, view[1] + *yaw), snap_pitch = aa_delta(tp, view[0] + *pitch);
+		snap_yaw = snap_yaw > step ? step : snap_yaw < -step ? -step : snap_yaw;
+		snap_pitch = snap_pitch > step ? step : snap_pitch < -step ? -step : snap_pitch;
+		*yaw += snap_yaw, *pitch += snap_pitch;
+		s->snap_t += dt;
+	} else
+		s->snap_ent = -1;
+	if (CFG_ONCE("aalog", 0)) {
+		static int tuned;
+		if (!tuned++)
+			log_printf("native: aim dvars: slowdown %g yaw %g/%g pitch %g/%g, lock-on %g strength %g deflection %g, auto aim %g lerp %g, range scales %g %g",
+				   aa_dvar(0x3cf0b0), aa_dvar(0x3cf0e0), aa_dvar(0x3cf0e8), aa_dvar(0x3cf0d0), aa_dvar(0x3cf0d8), aa_dvar(0x3cf148), aa_dvar(0x3cf160),
+				   aa_dvar(0x3cf158), aa_dvar(0x3cf0f0), aa_dvar(0x3cf100), aa_dvar(0x3cf050), aa_dvar(0x3cf058));
+		static DWORD last[2];
+		DWORD now = GetTickCount();
+		if (now - last[pl] >= 250 || (snap && s->snap_t <= dt)) {
+			last[pl] = now;
+			int n = *(const int *)(aa + 0xe3c);
+			const aa_target_t *closest = aa_pick(aa, 1.0f, 1.0f, 1e9f);
+			log_printf("native: aim %d: weapon %d ranges %.0f/%.0f ads %.2f, %d targets (nearest %d at %.0f, xhair %.3f), regions %.3f %.3f / %.3f %.3f / %.3f %.3f, "
+				   "stick %.2f %.2f -> slow %d, lock %d (%.3f %.3f), snap %d (%.2f %.2f)",
+				   pl, weapon, range, auto_range, ads_lerp, n, closest ? closest->ent : -1, closest ? sqrtf(closest->dist2) : 0, closest ? sqrtf(closest->xhair2) : 0, region[0],
+				   region[1], region[2], region[3], region[6], region[7], stick_yaw, stick_pitch, slow ? slow->ent : -1, lock ? lock->ent : -1, lock_yaw,
+				   lock_pitch, snap ? snap->ent : -1, snap_yaw, snap_pitch);
+		}
+	}
+}
+
 // one player's pad, his context live; play=0 reads it for the menus only (his context is not drawn: one picture)
 static void pad_frame_player(int pl, int play)
 {
@@ -2150,9 +2319,13 @@ static void pad_frame_player(int pl, int play)
 	if (pad_dev[pl] < 0)
 		return;
 	xin_state_t st;
-	DWORD now = GetTickCount();
-	float dt = p->last_tick ? (now - p->last_tick) / 1000.0f : 0.016f;
-	p->last_tick = now;
+	static LARGE_INTEGER freq;
+	LARGE_INTEGER now;
+	if (!freq.QuadPart)
+		QueryPerformanceFrequency(&freq);
+	QueryPerformanceCounter(&now);
+	float dt = p->last_count ? (float)(now.QuadPart - p->last_count) / (float)freq.QuadPart : 0.016f;
+	p->last_count = now.QuadPart;
 	if (dt > 0.1f)
 		dt = 0.1f;
 	if (!pad_read(pl, &st)) { // no pad: no input
@@ -2165,22 +2338,37 @@ static void pad_frame_player(int pl, int play)
 		if (pl == 0)
 			pad_menu(pl, &st);
 		p->forward = p->right = 0;
+		rumble_frame(pl, pad_dev[pl], 0); // paused: still
 		return;
 	}
 	p->menu_held = st.pad.buttons; // (a button that closed a menu does not act in the game too)
 	if (!play)
 		return;
+	padopts_t o; // the player's options (Options > Controls > Gamepad: Alpha / Bravo)
+	padopts_get(pl, &o);
+	rumble_frame(pl, pad_dev[pl], o.rumble);
 	const float move_dead = CFG_ONCE("padmovedead", 18) / 100.0f, look_dead = CFG_ONCE("paddead", 22) / 100.0f;
 	const float curve = CFG_ONCE("padcurve", 160) / 100.0f, trig = CFG_ONCE("padtrigger", 30) * 255 / 100.0f;
 	float lx = st.pad.lx / 32767.0f, ly = st.pad.ly / 32767.0f, rx = st.pad.rx / 32767.0f, ry = st.pad.ry / 32767.0f;
+	if (o.southpaw) { // the left stick looks, the right one moves
+		float x = lx, y = ly;
+		lx = rx, ly = ry, rx = x, ry = y;
+	}
 	pad_stick(&lx, &ly, move_dead, 1.0f);
 	pad_stick(&rx, &ry, look_dead, curve);
 	p->forward = (int)(ly * 127.0f);
 	p->right = (int)(lx * 127.0f);
-	float scale = p->lt ? CFG_ONCE("padads", 42) / 100.0f : 1.0f;
+	const int rt = st.pad.rt > trig, lt = st.pad.lt > trig;
+	const float scale = (lt ? CFG_ONCE("padads", 42) / 100.0f : 1.0f) * o.sens / 3.0f; // sensitivity 3: the speeds of padyaw / padpitch
+	float yaw = -rx * (float)CFG_ONCE("padyaw", 180) * scale * dt;                       // left is positive
+	float pitch = ((CFG_ONCE("padinvert", 0) != 0) != o.invert ? 1.0f : -1.0f) * ry * (float)CFG_ONCE("padpitch", 130) * scale * dt; // down is positive
+	if (o.assist && !qa_noassist[pl])
+		aim_assist(pl, dt, &yaw, &pitch, sqrtf(lx * lx + ly * ly), sqrtf(rx * rx + ry * ry), lt);
+	else
+		aa_state[pl].lock_ent = aa_state[pl].snap_ent = -1, aa_state[pl].ads_was = lt;
 	float *acc = (float *)(base + 0x533d14); // the live context's
-	acc[1] -= rx * (float)CFG_ONCE("padyaw", 180) * scale * dt; // yaw
-	acc[0] += (CFG_ONCE("padinvert", 0) ? 1.0f : -1.0f) * ry * (float)CFG_ONCE("padpitch", 130) * scale * dt; // pitch (down is positive)
+	acc[1] += yaw;
+	acc[0] += pitch;
 	if (acc[0] > 85.0f)
 		acc[0] = 85.0f;
 	if (acc[0] < -85.0f)
@@ -2206,6 +2394,8 @@ static void pad_frame_player(int pl, int play)
 	    {0x0008, "actionslot 4", NULL},  // d-pad right
 	};
 	WORD buttons = st.pad.buttons;
+	if (o.tactical && ((buttons & 0x2000) != 0) != ((buttons & 0x0080) != 0)) // the tactical layout: B and the right stick click change places
+		buttons ^= 0x2000 | 0x0080;
 	for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
 		int was = (p->held & map[i].mask) != 0, is = (buttons & map[i].mask) != 0;
 		if (was == is)
@@ -2216,7 +2406,6 @@ static void pad_frame_player(int pl, int play)
 			pad_action(map[i].press);
 	}
 	p->held = buttons;
-	int rt = st.pad.rt > trig, lt = st.pad.lt > trig;
 	if (rt != p->rt)
 		pad_binding("attack", rt);
 	if (lt != p->lt)
@@ -2519,15 +2708,20 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 // The simulation step and the hand-over of its results (rva 0x2343a0) run from inside the client frame (called at 0xb8d50): in context 1's frame they would write context 0's data
 // into the live (context 1's) client block. They run with context 0 live; the hand-over hooks above put each client's data where its context keeps it.
 static void (*server_step_original)(void);
+static void aim_targets_update(void);
 static void server_step_hook(void)
 {
 	if (ctx_current == 1) {
 		ctx_swap(0);
 		server_step_original();
+		if (native_active)
+			aim_targets_update();
 		ctx_swap(1);
 		return;
 	}
 	server_step_original();
+	if (native_active)
+		aim_targets_update();
 }
 
 // Player 1 (local client 1) has no input device yet: every simulation step he gets the usercmd of player 0 with the buttons and the movement cleared and the view turned by
@@ -3263,12 +3457,70 @@ static void viewmodel_setup_hook(int lc, void *a, unsigned weapon, void *b, char
 
 // The sound listener (rva 0x6a570, called at 0xbd2c5 near the end of the cgame draw) takes the camera's position and axes of local client 0: both contexts would set it, the hearing would jump between
 // the players every frame. Only context 0's player is heard.
-static void (*listener_original)(int, void *, void *, void *, unsigned, float);
-static void listener_hook(int lc, void *origin, void *forward, void *up, unsigned a, float b)
+// The call at rva 0xbd2c5 is the aim assist's screen target update (rva 0x6a570: eye, view origin, view angles), not the sound listener it was once taken for: it runs
+// in both contexts, each into its own copy of aaGlob (a swapped range). Its target list (rva 0x6b230, called at 0x6a711) is the server client's of local client 0 in
+// both: context 1 gets client 1's.
+static void (*screen_targets_original)(int, void *, void *, void *, unsigned, float);
+static void screen_targets_hook(int lc, void *eye, void *origin, void *angles, unsigned a, float b)
 {
-	if (native_active && ctx_current == 1)
-		return;
-	listener_original(lc, origin, forward, up, a, b);
+	screen_targets_original(lc, eye, origin, angles, a, b);
+}
+static void (*target_list_original)(int, void **, int *);
+static void target_list_hook(int lc, void **list, int *count)
+{
+	target_list_original(native_active && ctx_current == 1 ? 1 : lc, list, count);
+}
+
+// The server side of the aim targets: the PC build no longer runs AimTarget_ProcessEntity (rva 0x6b5a0) for each entity, so the lists the cgame takes its screen
+// targets from (aimTargetGlob, rva 0x3d0530, 0x210c bytes per client: the list being built at +0 with its count at +0xb00, the one read at +0x1608 with its count
+// at +0x2108, 0x2c bytes a target) stay empty. After each simulation step: each client's list cleared, every entity that ProcessEntity would take checked for
+// both clients (an enemy the client can see goes into his list, rva 0x6b630 -> 0x6a9a0; ProcessEntity's own loop asks rva 0x6bae0 for the number of clients,
+// which reads the client code's copy of the local player count, 1), and the lists published. g_entities: rva 0xd9e070, 0x2a0 bytes each: in use +0xac / +0xb0,
+// type +0 (13 an actor: health +0x164, sentient +0x118 with its team at +8), eFlags +0xc, +0x8c, the clients' "seen" bits 0x80000 << client at +0x150;
+// level.num_entities at rva 0xd96e80.
+static void aim_targets_update(void)
+{
+	uint8_t *glob = base + 0x3d0530;
+	int count = *(int *)(base + 0xd96e80);
+	if (count <= 0 || count > 2048)
+		count = 2048;
+	for (int c = 0; c < 2; c++)
+		*(int *)(glob + c * 0x210c + 0xb00) = 0;
+	// Only living actors of another team than player 1's; and the check's "seen" bits are kept here, not in the entity: this PC build is not known to leave those
+	// bits of +0x150 alone (with them written for every entity, Price was not drawn on Contingency, owner 2026-10-28), so the entity gets ours for the call and its
+	// own back after it
+	static uint32_t seen[2048];
+	const uint8_t *own = *(uint8_t **)(base + 0xd9e070 + 0x118); // player 1's sentient: his team at +8
+	const int team = own ? *(const int *)(own + 8) : -1;
+	void (*for_client)(int, uint8_t *) = (void (*)(int, uint8_t *))(base + 0x6b630);
+	for (int i = 0; i < count; i++) {
+		uint8_t *ent = base + 0xd9e070 + (size_t)i * 0x2a0;
+		const uint8_t *sentient = *(uint8_t **)(ent + 0x118);
+		if (!ent[0xac] || !ent[0xb0] || ent[0] != 13 || *(int *)(ent + 0x164) <= 0 || !sentient || (unsigned)(*(const int *)(sentient + 8) - 1) >= 3 ||
+		    *(const int *)(sentient + 8) == team) {
+			seen[i] = 0;
+			continue;
+		}
+		uint32_t *flags = (uint32_t *)(ent + 0x150), keep = *flags;
+		*flags = (keep & ~0x180000u) | seen[i];
+		for (int c = 0; c < 2; c++)
+			for_client(c, ent);
+		seen[i] = *flags & 0x180000u;
+		*flags = keep;
+	}
+	for (int c = 0; c < 2; c++) {
+		uint8_t *list = glob + c * 0x210c;
+		int n = *(int *)(list + 0xb00);
+		if (n < 0 || n > 64)
+			n = 0;
+		memcpy(list + 0x1608, list, (size_t)n * 0x2c);
+		*(int *)(list + 0x2108) = n;
+	}
+	static DWORD logged;
+	if (CFG_ONCE("aalog", 0) && GetTickCount() - logged >= 1000) {
+		logged = GetTickCount();
+		log_printf("native: aim targets: %d entities, client 0 %d, client 1 %d", count, *(int *)(glob + 0x2108), *(int *)(glob + 0x210c + 0x2108));
+	}
 }
 
 static void contexts_install(void)
@@ -3295,7 +3547,8 @@ static void contexts_install(void)
 	    {0xc594a, viewmodel_setup_hook, (void **)&viewmodel_setup_original},
 	    {0xc5dfb, viewmodel_setup_hook, (void **)&viewmodel_setup_original},
 	    {0xc6033, viewmodel_setup_hook, (void **)&viewmodel_setup_original},
-	    {0xbd2c5, listener_hook, (void **)&listener_original},
+	    {0xbd2c5, screen_targets_hook, (void **)&screen_targets_original},
+	    {0x6a711, target_list_hook, (void **)&target_list_original},
 	    {0xbd03b, hud_x0_hook, (void **)&hud_x_original[0]},
 	    {0xbd0fb, hud_x1_hook, (void **)&hud_x_original[1]},
 	    {0xbd102, hud_x2_hook, (void **)&hud_x_original[2]},
@@ -3341,6 +3594,7 @@ static void contexts_install(void)
 	}
 	p1pad = cfg("p1pad", -1);
 	pad_dev[0] = cfg("p0pad", -1);
+	rumble_set_log(cfg("rumblelog", 0));
 	skip_hud_mask = cfg("skiphud", 0);
 	skip_ctx = cfg("skipctx", 1);
 	if (cfg("entclean", 1) &&
@@ -3579,6 +3833,7 @@ void native_split_stop(void)
 	}
 	session_reset();
 	journal_restore(1);
+	rumble_reset();
 	log_printf("native: split screen session over, the game's own player count is back");
 }
 

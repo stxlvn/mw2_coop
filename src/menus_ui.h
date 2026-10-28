@@ -79,3 +79,5 @@ uint8_t *ui_clone_menu(uint8_t *from, const char *name);
 int ui_register_menu(uint8_t *menu);
 // A copy of an item for another menu (or the same one), without focus.
 uint8_t *ui_clone_item(uint8_t *from, uint8_t *parent_menu);
+// A copy of a handler set with <from> replaced by <to> in its script strings; NULL if no script had <from>.
+void *ui_script_replace(const void *set, const char *from, const char *to);

@@ -141,6 +141,23 @@ static const ModString strings[] = {
 	// (Back: отменить) / (Backspace: отменить): how a player takes his device choice back
 	{"MW2COOP_SPLIT_CANCEL_PAD", " (Back: \xee\xf2\xec\xe5\xed\xe8\xf2\xfc)", " (Back: cancel)"},
 	{"MW2COOP_SPLIT_CANCEL_KB", " (Backspace: \xee\xf2\xec\xe5\xed\xe8\xf2\xfc)", " (Backspace: cancel)"},
+	// Геймпад: Альфа / Геймпад: Браво: the gamepad options pages under Options > Controls (padopts.c) and their rows
+	{"MW2COOP_PAD_MENU_1", "\xc3\xe5\xe9\xec\xef\xe0\xe4: \xc0\xeb\xfc\xf4\xe0", "Gamepad: Alpha"},
+	{"MW2COOP_PAD_MENU_2", "\xc3\xe5\xe9\xec\xef\xe0\xe4: \xc1\xf0\xe0\xe2\xee", "Gamepad: Bravo"},
+	// Чувствительность обзора
+	{"MW2COOP_PAD_SENS", "\xd7\xf3\xe2\xf1\xf2\xe2\xe8\xf2\xe5\xeb\xfc\xed\xee\xf1\xf2\xfc \xee\xe1\xe7\xee\xf0\xe0", "Look sensitivity"},
+	// Инверсия обзора
+	{"MW2COOP_PAD_INVERT", "\xc8\xed\xe2\xe5\xf0\xf1\xe8\xff \xee\xe1\xe7\xee\xf0\xe0", "Invert look"},
+	// Помощь в прицеливании
+	{"MW2COOP_PAD_ASSIST", "\xcf\xee\xec\xee\xf9\xfc \xe2 \xef\xf0\xe8\xf6\xe5\xeb\xe8\xe2\xe0\xed\xe8\xe8", "Aim assist"},
+	// Стики местами (левша)
+	{"MW2COOP_PAD_SOUTHPAW", "\xd1\xf2\xe8\xea\xe8 \xec\xe5\xf1\xf2\xe0\xec\xe8 (\xeb\xe5\xe2\xf8\xe0)", "Swap sticks (southpaw)"},
+	// Тактическая раскладка (присесть на правый стик)
+	{"MW2COOP_PAD_TACTICAL",
+	 "\xd2\xe0\xea\xf2\xe8\xf7\xe5\xf1\xea\xe0\xff \xf0\xe0\xf1\xea\xeb\xe0\xe4\xea\xe0 (\xef\xf0\xe8\xf1\xe5\xf1\xf2\xfc \xed\xe0 \xef\xf0\xe0\xe2\xfb\xe9 \xf1\xf2\xe8\xea)",
+	 "Tactical layout (crouch on the right stick)"},
+	// Вибрация
+	{"MW2COOP_PAD_RUMBLE", "\xc2\xe8\xe1\xf0\xe0\xf6\xe8\xff", "Vibration"},
 	// Игрок 1: / Игрок 2: (the split screen lobby's hint line: each player presses a button on his device)
 	{"MW2COOP_SPLIT_P1", "\xc8\xe3\xf0\xee\xea 1: ", "Player 1: "},
 	{"MW2COOP_SPLIT_P2", "\xc8\xe3\xf0\xee\xea 2: ", "Player 2: "},

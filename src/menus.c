@@ -33,6 +33,7 @@
 #include "splitscreen.h"
 #include "native.h"
 #include "padicon.h"
+#include "padopts.h"
 #include "log.h"
 #include "settings.h"
 #include "upnp.h"
@@ -204,6 +205,47 @@ void *ui_script_set(const char *script)
 	set->count = 1;
 	set->handlers = list;
 	return set;
+}
+
+void *ui_script_replace(const void *from_set, const char *from, const char *to)
+{
+	const MenuEventHandlerSet *src = from_set;
+	if (!src || src->count <= 0)
+		return NULL;
+	MenuEventHandlerSet *set = HeapAlloc(GetProcessHeap(), 0, sizeof(*set));
+	MenuEventHandler **list = HeapAlloc(GetProcessHeap(), 0, src->count * sizeof(*list));
+	*set = *src;
+	int replaced = 0;
+	const size_t from_len = strlen(from), to_len = strlen(to);
+	for (int i = 0; i < src->count; i++) {
+		MenuEventHandler *h = HeapAlloc(GetProcessHeap(), 0, sizeof(*h));
+		*h = *src->handlers[i];
+		const char *s = h->type == 0 ? (const char *)h->data : NULL;
+		if (s && strstr(s, from)) {
+			size_t n = 0;
+			for (const char *p = s; (p = strstr(p, from)); p += from_len)
+				n++;
+			char *out = HeapAlloc(GetProcessHeap(), 0, strlen(s) + n * to_len + 1), *o = out;
+			for (const char *p = s, *hit; *p; p = hit + from_len) {
+				hit = strstr(p, from);
+				if (!hit) {
+					strcpy(o, p);
+					o += strlen(p);
+					break;
+				}
+				memcpy(o, p, hit - p);
+				o += hit - p;
+				memcpy(o, to, to_len);
+				o += to_len;
+			}
+			*o = 0;
+			h->data = out;
+			replaced++;
+		}
+		list[i] = h;
+	}
+	set->handlers = list;
+	return replaced ? set : NULL;
 }
 
 uint8_t *ui_clone_item(uint8_t *from, uint8_t *parent_menu)
@@ -1728,6 +1770,7 @@ static void tick_f(void)
 	add_host_menu();
 	add_saves_menu();
 	add_partner_popups();
+	padopts_tick();
 	picking_tick();
 	unlock_missions_tick();
 	find_tick();

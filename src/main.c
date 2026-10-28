@@ -17,6 +17,7 @@
 #include "log.h"
 #include "menus.h"
 #include "mirror.h"
+#include "rumble.h"
 #include "net.h"
 #include "party.h"
 #include "progress.h"
@@ -62,6 +63,7 @@ static DWORD WINAPI watcher(LPVOID unused)
 		crash_install();
 		scripts_install();
 		mirror_install();
+		rumble_install();
 		transplant_install();
 		zones_install();
 		localize_install();

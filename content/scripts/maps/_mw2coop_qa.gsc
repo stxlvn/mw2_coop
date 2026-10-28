@@ -55,6 +55,13 @@
 //   betrayal - (estate, start "ending"; MW2COOP_GOD=0, god mode swallows Shepherd's shot) Loose
 //              Ends' ending: both players go through Ghost's drag, the LZ, Shepherd's shot (it hits
 //              both), the body toss and the fire as Roach, at his place
+//   aimassist - (native split screen, a map with enemies; [native] p1pad=<n>) player 2's pad aim
+//              assist (src/native.c aim_assist), his pad pressed through the dvar mw2coop_qa_pad2:
+//              an enemy 400 units ahead; aiming down the sight 6 degrees beside it turns onto it;
+//              a steady turn across it slows over it; a strafe past it keeps nearer with assist
+//   bodycam  - (native split screen) player 1 looks at player 2, who is turned four ways and then
+//              by his pad: player 2's body must face where his camera looks; the composed picture
+//              of each (both halves) is saved through the dvar mw2coop_qa_frame
 // Results go to the dvar mw2coop_qa_log, which the DLL writes to mw2coop.log on each PC.
 #include common_scripts\utility;
 #include maps\_utility;
@@ -279,6 +286,12 @@ main()
 				[[ level.mw2coop_qa_climb ]]();
 			else
 				report( "climb: not on Cliffhanger" );
+			break;
+		case "aimassist":
+			aimassist();
+			break;
+		case "bodycam":
+			bodycam();
 			break;
 		default:
 			report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );
@@ -3240,5 +3253,225 @@ lineoffire()
 	for ( t = 0; t < 10 && !level.mw2coop.failing; t += 0.5 )
 		wait 0.5;
 	check( level.mw2coop.failing, "the mission failed for both" );
+	report( "done" );
+}
+
+// Aim assist of player 2's pad (see the list at the top). Each phase's samples go out in one
+// report: report() waits, and the DLL reads the log dvar every 250 ms.
+aimassist()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	if ( !flag_exist( "introscreen_complete" ) || !flag( "introscreen_complete" ) )
+		level waittill_notify_or_timeout( "introscreen_complete", 30 );
+	wait 8;	// the title lines are gone
+	p2 = level.player2;
+	// the allies are drawn (Price was not, with the aim target check writing every entity's flags)
+	allies = GetAIArray( "allies" );
+	text = allies.size + " allies:";
+	foreach ( ally in allies )
+		text = text + " " + ally GetEntityNumber() + " " + ally.model + " " + int( Distance( ally.origin, level.player.origin ) );
+	report( text );
+	if ( allies.size )
+	{
+		ally = allies[ 0 ];
+		foreach ( other in allies )
+			if ( DistanceSquared( other.origin, level.player.origin ) < DistanceSquared( ally.origin, level.player.origin ) )
+				ally = other;
+		for ( t = 0; t < 10; t++ )
+		{
+			foreach ( player in level.players )
+				player SetPlayerAngles( VectorToAngles( ally GetEye() - player GetEye() ) );
+			wait 0.05;
+		}
+		SetDvar( "mw2coop_qa_frame", "aa-ally" );
+		wait 0.5;
+	}
+	guy = aa_enemy( p2 );
+	check( isdefined( guy ), "an enemy to aim at" );
+	if ( !isdefined( guy ) )
+		return;
+	foreach ( player in level.players )
+		player.ignoreme = true;
+	guy.ignoreall = true;
+	guy.goalradius = 8;
+	yaw = p2 GetPlayerAngles()[ 1 ];
+	ahead = p2.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 400;
+	spot = PlayerPhysicsTrace( ahead + ( 0, 0, 48 ), ahead - ( 0, 0, 96 ) );
+	guy ForceTeleport( spot, ( 0, yaw + 180, 0 ) );
+	guy SetGoalPos( spot );
+	guy thread aa_hold( spot, yaw + 180 );
+	start = p2.origin;
+	wait 1;
+	report( "enemy " + guy GetEntityNumber() + " " + int( Distance( p2.origin, guy.origin ) ) + " units ahead" );
+
+	// 1: aiming down the sight 6 degrees beside it
+	aa_aim( p2, guy, 6 );
+	wait 0.5;
+	text = "snap: before " + aa_off( p2, guy );
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 255 0" );
+	for ( i = 1; i <= 8; i++ )
+	{
+		wait 0.1;
+		text = text + ", " + ( i * 100 ) + " ms " + aa_off( p2, guy );
+		if ( i == 6 )
+			SetDvar( "mw2coop_qa_frame", "aa-ads" );
+	}
+	off = aa_yaw_off( p2, guy );
+	report( text );
+	check( abs( off ) < 2, "aiming down the sight turned player 2 onto the enemy (" + off + " degrees off)" );
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0" );
+	wait 1;
+
+	// 2: a steady turn to the right from 25 degrees to the left of it
+	aa_aim( p2, guy, 25 );
+	wait 0.5;
+	SetDvar( "mw2coop_qa_pad2", "0 0 16000 0 0 0 0" );
+	text = "turn (off, degrees a second):";
+	far = 0;
+	over = 0;
+	far_n = 0;
+	over_n = 0;
+	last = p2 GetPlayerAngles()[ 1 ];
+	for ( i = 0; i < 24; i++ )
+	{
+		wait 0.05;
+		now = p2 GetPlayerAngles()[ 1 ];
+		speed = AngleClamp180( last - now ) / 0.05;
+		last = now;
+		off = aa_yaw_off( p2, guy );
+		text = text + " " + int( off ) + "/" + int( speed );
+		if ( abs( off ) < 2 )
+		{
+			over += speed;
+			over_n++;
+		}
+		else if ( abs( off ) > 10 )
+		{
+			far += speed;
+			far_n++;
+		}
+	}
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0" );
+	report( text );
+	if ( far_n && over_n )
+		check( over / over_n < 0.8 * far / far_n, "the turn slows over the enemy (" + int( far / far_n ) + " away, " + int( over / over_n ) + " over it)" );
+	else
+		report( "FAIL the turn did not pass over the enemy (" + far_n + " samples away, " + over_n + " over it)" );
+	wait 1;
+
+	// 3: strafing right for a second while looking at it, with aim assist and without (the pad
+	// dvar's eighth value turns it off: a script cannot write the option's code dvar)
+	result = [];
+	for ( assist = 1; assist >= 0; assist-- )
+	{
+		p2 SetOrigin( start );
+		aa_aim( p2, guy, 0 );
+		wait 0.5;
+		SetDvar( "mw2coop_qa_pad2", "32767 0 0 0 0 0 0 " + ( 1 - assist ) );
+		wait 0.5;
+		if ( assist )
+			SetDvar( "mw2coop_qa_frame", "aa-strafe" );
+		wait 0.5;
+		result[ assist ] = aa_yaw_off( p2, guy );
+		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0" );
+		wait 0.5;
+	}
+	level notify( "mw2coop_aa_done" );
+	check( abs( result[ 1 ] ) < abs( result[ 0 ] ) * 0.8, "a strafe keeps nearer the enemy with aim assist (" + result[ 1 ] + " degrees off, without " + result[ 0 ] + ")" );
+	// 4: vibration ([native] rumblelog=1 logs it): damage on player 2, a grenade near him, one far off
+	p2 PlayRumbleOnEntity( "damage_heavy" );
+	wait 1;
+	PlayRumbleOnPosition( "grenade_rumble", p2.origin + ( 200, 0, 0 ) );
+	wait 1;
+	PlayRumbleOnPosition( "grenade_rumble", p2.origin + ( 5000, 0, 0 ) );
+	wait 1;
+	report( "rumbles played: damage on player 2, a grenade 200 units off, one 5000 units off" );
+	report( "done" );
+}
+
+// keeps an AI at one spot facing one way (a patrol would walk it off)
+aa_hold( spot, yaw )
+{
+	self endon( "death" );
+	level endon( "mw2coop_aa_done" );
+	for ( ;; )
+	{
+		self ForceTeleport( spot, ( 0, yaw, 0 ) );
+		wait 0.05;
+	}
+}
+
+// the axis AI nearest p, or one spawned from an axis spawner
+aa_enemy( p )
+{
+	best = undefined;
+	foreach ( guy in GetAIArray( "axis" ) )
+		if ( !isdefined( best ) || DistanceSquared( guy.origin, p.origin ) < DistanceSquared( best.origin, p.origin ) )
+			best = guy;
+	if ( isdefined( best ) )
+		return best;
+	foreach ( spawner in GetSpawnerTeamArray( "axis" ) )
+	{
+		guy = spawner StalingradSpawn();
+		if ( !spawn_failed( guy ) )
+			return guy;
+	}
+	return undefined;
+}
+
+aa_aim( p, guy, yaw_off )
+{
+	ang = VectorToAngles( guy GetTagOrigin( "j_head" ) - p GetEye() );
+	p SetPlayerAngles( ( ang[ 0 ], ang[ 1 ] + yaw_off, 0 ) );
+}
+
+aa_yaw_off( p, guy )
+{
+	return AngleClamp180( p GetPlayerAngles()[ 1 ] - VectorToAngles( guy GetTagOrigin( "j_head" ) - p GetEye() )[ 1 ] );
+}
+
+aa_off( p, guy )
+{
+	ang = VectorToAngles( guy GetTagOrigin( "j_head" ) - p GetEye() );
+	now = p GetPlayerAngles();
+	return int( AngleClamp180( now[ 1 ] - ang[ 1 ] ) * 10 ) / 10 + "/" + int( AngleClamp180( now[ 0 ] - ang[ 0 ] ) * 10 ) / 10;
+}
+
+// Player 2's body faces where his camera looks (see the list at the top; the owner saw it turned
+// away from the camera on Contingency, 2026-10-28)
+bodycam()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	if ( !flag_exist( "introscreen_complete" ) || !flag( "introscreen_complete" ) )
+		level waittill_notify_or_timeout( "introscreen_complete", 30 );
+	wait 2;
+	p1 = level.player;
+	p2 = level.player2;
+	yaw = p1 GetPlayerAngles()[ 1 ];
+	ahead = p1.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 150;
+	p2 SetOrigin( PlayerPhysicsTrace( ahead + ( 0, 0, 48 ), ahead - ( 0, 0, 96 ) ) );
+	for ( i = 0; i < 4; i++ )
+	{
+		p2 SetPlayerAngles( ( 0, yaw + 180 + i * 90, 0 ) );	// 0: facing player 1
+		for ( t = 0; t < 20; t++ )
+		{
+			p1 SetPlayerAngles( VectorToAngles( p2 GetEye() - ( 0, 0, 20 ) - p1 GetEye() ) );
+			wait 0.05;
+		}
+		SetDvar( "mw2coop_qa_frame", "bodycam-" + ( i * 90 ) );
+		report( "player 2 turned " + ( i * 90 ) + " from facing player 1: view yaw " + int( p2 GetPlayerAngles()[ 1 ] ) + ", body yaw " + int( p2.angles[ 1 ] ) + ", player 1 yaw " + int( yaw ) );
+	}
+	SetDvar( "mw2coop_qa_pad2", "0 0 20000 0 0 0 0" );
+	for ( t = 0; t < 20; t++ )
+	{
+		p1 SetPlayerAngles( VectorToAngles( p2 GetEye() - ( 0, 0, 20 ) - p1 GetEye() ) );
+		wait 0.05;
+	}
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0" );
+	wait 0.5;
+	SetDvar( "mw2coop_qa_frame", "bodycam-pad" );
+	report( "player 2 turned by his pad: view yaw " + int( p2 GetPlayerAngles()[ 1 ] ) + ", body yaw " + int( p2.angles[ 1 ] ) );
 	report( "done" );
 }
