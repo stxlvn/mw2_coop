@@ -652,6 +652,11 @@ static const uint8_t is_default_bytes[] = {0x53, 0x8b, 0x5c, 0x24, 0x0c, 0x56, 0
 #define LEAK_COUNT_RVA 0xa8a830
 #define LEAK_RESUME_RVA 0xf00c8 // the epilogue the found path also ends in
 static const uint8_t leak_exit_bytes[] = {0xb8, 0x01, 0x00, 0x00, 0x00}; // mov eax,1
+#elif defined(MW2COOP_IW4X)
+// the 1.0.159 exe of iw4x-sp: DB_IsXAssetDefault at 0x1ab70, the same not-found exit at +0x7d, the counter pushed as 0xcffe34
+#define LEAK_EXIT_RVA 0x1abed
+#define LEAK_COUNT_RVA 0x8ffe34
+static const uint8_t leak_exit_bytes[] = {0x5f, 0x5e, 0xb8, 0x01, 0x00, 0x00, 0x00, 0x5b, 0xc3}; // pop edi; pop esi; mov eax,1; pop ebx; ret
 #else
 #define LEAK_EXIT_RVA 0xc332d
 #define LEAK_COUNT_RVA 0x8fc8b4
