@@ -27,6 +27,7 @@
 #include "game.h"
 #include "access.h"
 #include "firewall.h"
+#include "hook.h"
 #include "localize.h"
 #include "instance.h"
 #include "splitscreen.h"
@@ -1455,6 +1456,119 @@ static void devmap_f(void)
 
 static void tick_f(void);
 
+#ifdef _WIN64
+// ---- the native split screen lobby: both players' cards, player 1's pad in the menus
+// The lobby's player cards come from the menu expression coopPlayerInfo(n, field) (rva 0x2442b0: local client, its arguments (count at [0x28], n as int / float / string at
+// [0]/[2], the field via rva 0x2447c0 on [4]), the result {type at [0] (0 a number, 2 a string), value at [2]}). In a split screen lobby both players are there from the
+// start, by their call signs (owner, 2026-10-28): Alpha (player 1, the top half) and Bravo (player 2); Start still waits for each to press a button on his device.
+static void (*player_info_original)(int, int *, int *);
+static const uint8_t player_info_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89,
+					    0x74, 0x24, 0x20, 0x41, 0x56, 0x48, 0x83, 0xec, 0x30};
+static void player_info_hook(int lc, int *args, int *out)
+{
+	player_info_original(lc, args, out);
+	if (!(split_mode && native_split_available()) || args[0x28] != 2)
+		return;
+	int n = args[0] == 1 ? (int)*(const float *)(args + 2) : args[0] == 0 ? args[2] : atoi(*(const char **)(args + 2));
+	if (n < 0 || n > 1)
+		return;
+	const char *field = ((const char *(*)(int *))(base + 0x2447c0))(args + 4);
+	if (!field)
+		return;
+	if (!strcmp(field, "exists")) {
+		out[0] = 0;
+		out[2] = 1;
+	} else if (!strcmp(field, "name")) {
+		static char names[2][32];
+		const char *t = localize_text(n ? "MW2COOP_CALLSIGN_B" : "MW2COOP_CALLSIGN_A");
+		snprintf(names[n], sizeof(names[n]), "%s", t ? t : n ? "Bravo" : "Alpha");
+		out[0] = 2;
+		*(const char **)(out + 2) = names[n];
+	}
+}
+
+// Player 1 works the lobby; on a pad, his pad does it: a thread reads it 60 times a second and queues the keys a menu knows (mw2coop_menukey: the engine's key event,
+// rva 0xd0f80, on the main thread). D-pad / left stick: arrows (a held direction again after 400 ms, then every 120 ms), A: Enter, B: Escape. Back is the lobby's
+// "give my device back" (instance.c).
+static void menukey_f(void)
+{
+	int key = atoi(game_cmd_argv(1));
+	if (key <= 0 || key > 255 || !base)
+		return;
+	unsigned t = (unsigned)GetTickCount();
+	((void (*)(int, int, int, unsigned))(base + 0xd0f80))(0, key, 1, t);
+	((void (*)(int, int, int, unsigned))(base + 0xd0f80))(0, key, 0, t);
+}
+static DWORD WINAPI lobby_pad_thread(LPVOID unused)
+{
+	(void)unused;
+	typedef struct {
+		DWORD packet;
+		WORD buttons;
+		BYTE lt, rt;
+		SHORT lx, ly, rx, ry;
+	} xs_t;
+	DWORD(WINAPI * get)(DWORD, xs_t *) = NULL;
+	const char *dlls[] = {"xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll"};
+	for (int k = 0; k < 3 && !get; k++) {
+		HMODULE h = LoadLibraryA(dlls[k]);
+		if (h)
+			get = (DWORD(WINAPI *)(DWORD, xs_t *))GetProcAddress(h, "XInputGetState");
+	}
+	if (!get)
+		return 0;
+	int seen = -1;
+	WORD prev = 0;
+	DWORD repeat_at = 0;
+	for (;;) {
+		Sleep(16);
+		int pad = instance_menu_pad();
+		if (!split_mode || native_split_active() || pad < 0) {
+			seen = -1;
+			continue;
+		}
+		xs_t st;
+		memset(&st, 0, sizeof(st));
+		if (get((DWORD)pad, &st) != ERROR_SUCCESS)
+			continue;
+		WORD b = st.buttons;
+		if (st.ly > 20000)
+			b |= 0x0001;
+		if (st.ly < -20000)
+			b |= 0x0002;
+		if (st.lx < -20000)
+			b |= 0x0004;
+		if (st.lx > 20000)
+			b |= 0x0008;
+		if (seen != pad) { // the press that made the pad his is not a menu key
+			seen = pad;
+			prev = b;
+			continue;
+		}
+		static const struct {
+			WORD mask;
+			int key;
+		} keys[] = {{0x0001, 154}, {0x0002, 155}, {0x0004, 156}, {0x0008, 157}, {0x1000, 13}, {0x2000, 27}};
+		DWORD now = GetTickCount();
+		for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+			int was = (prev & keys[i].mask) != 0, is = (b & keys[i].mask) != 0;
+			int send = is && !was;
+			if (is && was && i < 4 && (int)(now - repeat_at) >= 0)
+				send = 1;
+			if (!send)
+				continue;
+			char cmd[32];
+			snprintf(cmd, sizeof(cmd), "mw2coop_menukey %d\n", keys[i].key);
+			game_cbuf_addtext(cmd);
+			if (i < 4)
+				repeat_at = now + (was ? 120 : 400);
+		}
+		prev = b;
+	}
+	return 0;
+}
+#endif
+
 static cmd_function_t commands[] = {
 	{NULL, "mw2coop_online", NULL, NULL, online_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_menu", NULL, NULL, host_menu_f CMD_NODE_FLAG},
@@ -1464,6 +1578,9 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_host_new", NULL, NULL, host_new_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_start", NULL, NULL, start_f CMD_NODE_FLAG},
+#ifdef _WIN64
+	{NULL, "mw2coop_menukey", NULL, NULL, menukey_f CMD_NODE_FLAG},
+#endif
 	{NULL, "mw2coop_ready", NULL, NULL, ready_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_partner_yes", NULL, NULL, partner_yes_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_member_yes", NULL, NULL, member_yes_f CMD_NODE_FLAG},
@@ -1550,7 +1667,9 @@ static void tick_f(void)
 		char line[256] = "", dev[64];
 		for (int pl = 0; pl < 2; pl++) {
 			int d = instance_device(pl);
-			const char *who = localize_text(pl ? "MW2COOP_SPLIT_P2" : "MW2COOP_SPLIT_P1");
+			char who[48]; // the player's call sign, as on his card
+			const char *sign = localize_text(pl ? "MW2COOP_CALLSIGN_B" : "MW2COOP_CALLSIGN_A");
+			snprintf(who, sizeof(who), "%s: ", sign ? sign : pl ? "Bravo" : "Alpha");
 			const char *what;
 			if (d == DEVICE_NONE)
 				what = localize_text("MW2COOP_SPLIT_PRESS");
@@ -1561,8 +1680,9 @@ static void tick_f(void)
 				snprintf(dev, sizeof(dev), f ? f : "pad %d", d + 1);
 				what = dev;
 			}
+			const char *cancel = d == DEVICE_NONE ? "" : localize_text(d == DEVICE_KEYBOARD ? "MW2COOP_SPLIT_CANCEL_KB" : "MW2COOP_SPLIT_CANCEL_PAD");
 			size_t n = strlen(line);
-			snprintf(line + n, sizeof(line) - n, "%s%s%s", pl ? "    " : "", who ? who : "", what ? what : "");
+			snprintf(line + n, sizeof(line) - n, "%s%s%s%s", pl ? "\n" : "", who, what ? what : "", cancel ? cancel : ""); // a line for each player
 			if (d == DEVICE_NONE)
 				break; // player 2 is asked once player 1 has his device
 		}
@@ -1586,6 +1706,12 @@ void menus_install(void)
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
 		game_add_command(&commands[i]);
+#ifdef _WIN64
+	if (memcmp(base + 0x2442b0, player_info_bytes, sizeof(player_info_bytes)) ||
+	    !hook_function(base + 0x2442b0, player_info_bytes, sizeof(player_info_bytes), player_info_hook, (void **)&player_info_original))
+		log_printf("menus: coopPlayerInfo not hooked (bytes differ)");
+	CreateThread(NULL, 0, lobby_pad_thread, NULL, 0, NULL);
+#endif
 	// devmap is a server command: the console node's function is empty and the command goes on
 	// to this node (Cmd_AddServerCommand in SV_AddOperatorCommands, rva 0x22bef0)
 	cmd_function_t *sv_devmap = (cmd_function_t *)(base + RVA_SV_CMD_DEVMAP);

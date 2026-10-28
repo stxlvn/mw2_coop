@@ -16,5 +16,6 @@ int instance_pad(void);          // the two-process split screen: player 2's pad
 #define DEVICE_NONE (-2)
 #define DEVICE_KEYBOARD (-1)
 int instance_device(int player); // DEVICE_NONE until he pressed, DEVICE_KEYBOARD, or an XInput pad 0-3
+int instance_menu_pad(void);     // player 1's pad in the lobby (he works the menus), -1 when he is not on a pad
 int instance_second_ready(void); // 1 when he pressed Ready
 void instance_install(void);

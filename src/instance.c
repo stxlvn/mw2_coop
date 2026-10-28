@@ -24,51 +24,100 @@ static volatile LONG assigned_dev[2] = {DEVICE_NONE, DEVICE_NONE}; // the player
 static volatile LONG second_ready;
 static volatile LONG assign_gen;
 
-// a key that went down on the keyboard since the last look, while the game window has the focus (the mouse's buttons are not the keyboard: the lobby is clicked with them)
-static int keyboard_pressed(void)
+// The lobby's devices are polled here (XInput state as XInputGetState gives it)
+typedef struct {
+	DWORD packet;
+	WORD buttons;
+	BYTE lt, rt;
+	SHORT lx, ly, rx, ry;
+} assign_pad_t;
+static DWORD(WINAPI *assign_xinput)(DWORD, assign_pad_t *);
+
+// what a device did since the last look: 0 nothing, 1 a press (a button, a trigger, a stick pushed), 2 its cancel (a pad's Back, the keyboard's Backspace)
+static int pad_event(int i)
+{
+	static WORD was[4];
+	static int moved[4];
+	if (!assign_xinput) {
+		const char *dlls[] = {"xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll"};
+		for (int k = 0; k < 3 && !assign_xinput; k++) {
+			HMODULE h = LoadLibraryA(dlls[k]);
+			if (h)
+				assign_xinput = (DWORD(WINAPI *)(DWORD, assign_pad_t *))GetProcAddress(h, "XInputGetState");
+		}
+		if (!assign_xinput)
+			return 0;
+	}
+	assign_pad_t st;
+	memset(&st, 0, sizeof(st));
+	if (assign_xinput((DWORD)i, &st) != ERROR_SUCCESS) {
+		was[i] = 0, moved[i] = 0;
+		return 0;
+	}
+	WORD b = st.buttons;
+	int m = st.lt > 100 || st.rt > 100 || st.lx > 20000 || st.lx < -20000 || st.ly > 20000 || st.ly < -20000;
+	WORD pressed = b & ~was[i];
+	int pushed = m && !moved[i];
+	was[i] = b, moved[i] = m;
+	if (pressed & 0x0020) // Back
+		return 2;
+	return pressed || pushed ? 1 : 0;
+}
+static int keyboard_event(void)
 {
 	static BYTE was[256];
 	DWORD pid = 0;
-	HWND fg = GetForegroundWindow();
-	GetWindowThreadProcessId(fg, &pid);
-	int any = 0;
+	GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+	int event = 0;
 	for (int vk = 8; vk < 256; vk++) {
 		if (vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2)
-			continue;
+			continue; // (the lobby is clicked with the mouse)
 		BYTE down = (GetAsyncKeyState(vk) & 0x8000) != 0;
 		if (down && !was[vk] && pid == GetCurrentProcessId())
-			any = 1;
+			event = vk == VK_BACK ? 2 : event ? event : 1;
 		was[vk] = down;
 	}
-	return any;
+	return event;
 }
 
-// The lobby's hint line tells each player to press a button on his device: the first device pressed is player 1's, the next other one player 2's. A pad is any of the four
-// XInput slots; the keyboard is any key. (Before this the first player was always the keyboard, and the second a pad.)
+// The split screen lobby: each player presses a button on his device. The first device pressed is player 1's, the next other one player 2's; a pad's Back or the
+// keyboard's Backspace takes the choice back (the slot is free for the next press). Runs as long as the lobby is open.
 static DWORD WINAPI assign_thread(LPVOID gen_arg)
 {
 	LONG gen = (LONG)(LONG_PTR)gen_arg;
-	keyboard_pressed(); // the keys held while the lobby opened are not a press
-	for (int i = 0; i < 12000 && gen == assign_gen; i++) { // ten minutes
-		Sleep(50);
-		int slot = assigned_dev[0] == DEVICE_NONE ? 0 : assigned_dev[1] == DEVICE_NONE ? 1 : -1;
-		if (slot < 0)
-			return 0;
-		int dev = DEVICE_NONE;
-		int pad = splitscreen_poll_any_pad();
-		if (keyboard_pressed())
-			dev = DEVICE_KEYBOARD;
-		else if (pad >= 0)
-			dev = pad;
-		if (dev == DEVICE_NONE || (slot == 1 && dev == assigned_dev[0]))
-			continue;
-		if (gen != assign_gen)
-			return 0;
-		InterlockedExchange(&assigned_dev[slot], dev);
-		log_printf("instance: player %d plays on %s %d", slot + 1, dev == DEVICE_KEYBOARD ? "the keyboard" : "pad", dev == DEVICE_KEYBOARD ? 0 : dev);
-		menus_split_changed();
+	keyboard_event(); // the keys held while the lobby opened are not a press
+	for (int i = 0; i < 4; i++)
+		pad_event(i);
+	while (gen == assign_gen) {
+		Sleep(30);
+		int ev[5];
+		for (int i = 0; i < 4; i++)
+			ev[i] = pad_event(i);
+		ev[4] = keyboard_event();
+		for (int k = 0; k < 5 && gen == assign_gen; k++) {
+			int dev = k < 4 ? k : DEVICE_KEYBOARD;
+			int slot = assigned_dev[0] == dev ? 0 : assigned_dev[1] == dev ? 1 : -1;
+			if (ev[k] == 2 && slot >= 0) {
+				InterlockedExchange(&assigned_dev[slot], DEVICE_NONE);
+				log_printf("instance: player %d gave his device back", slot + 1);
+				menus_split_changed();
+			} else if (ev[k] == 1 && slot < 0) {
+				int free = assigned_dev[0] == DEVICE_NONE ? 0 : assigned_dev[1] == DEVICE_NONE ? 1 : -1;
+				if (free < 0)
+					continue;
+				InterlockedExchange(&assigned_dev[free], dev);
+				log_printf("instance: player %d plays on %s %d", free + 1, dev == DEVICE_KEYBOARD ? "the keyboard" : "pad", dev == DEVICE_KEYBOARD ? 0 : dev);
+				menus_split_changed();
+			}
+		}
 	}
 	return 0;
+}
+
+// for menus.c: the lobby is worked by player 1; when he plays on a pad, his pad's buttons as menu keys (the lobby's own thread only reads presses)
+int instance_menu_pad(void)
+{
+	return assigned_dev[0] >= 0 ? (int)assigned_dev[0] : -1;
 }
 
 void instance_assign_begin(void)

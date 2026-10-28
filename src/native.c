@@ -1988,7 +1988,7 @@ static void snapshot_msg_hook(void *msg, int time)
 // live block, rva 0x533d14 pitch / 0x533d18 yaw, degrees), the buttons run the game's own actions for the live kbuttons (rva 0xd1810 name -> index in the action table at rva
 // 0x3be770, 0xce450 runs it for the local client with a key number no keyboard sends). The layout is the console's: A jump, B stance (hold: prone, cl_stanceHoldTime),
 // X reload (hold: use), Y next weapon, LB special grenade, RB frag, LT aim, RT fire, LS sprint / hold breath, RS melee, d-pad the action slots, Back objectives, Start pause.
-// In a menu (key catchers 0x10) the pad sends the keys a menu knows: d-pad / left stick arrows, A Enter, B / Start Escape.
+// In a menu (key catchers 0x10) player 1's pad sends the keys a menu knows: d-pad / left stick arrows, A Enter, B / Start Escape; player 2's pad does nothing there.
 typedef struct {
 	WORD buttons;
 	BYTE lt, rt;
@@ -2161,8 +2161,9 @@ static void pad_frame_player(int pl, int play)
 		return;
 	}
 	p->active = 1;
-	if (*(unsigned *)(base + 0x533cb0) & 0x10) { // a menu
-		pad_menu(pl, &st);
+	if (*(unsigned *)(base + 0x533cb0) & 0x10) { // a menu: player 1 works it; player 2 only pauses the game (Start in play), he does not work the menus
+		if (pl == 0)
+			pad_menu(pl, &st);
 		p->forward = p->right = 0;
 		return;
 	}
@@ -2469,12 +2470,15 @@ static void mouse_read2_hook(long long state, float *x, float *y)
 	mouse_read2_original(state, x, y);
 }
 
-// The keyboard's player 2: the event loop's key events (rva 0xd0f80, called at 0x1fbc1d) run with context 1 live, so the keys press his kbuttons (in the swapped input block);
-// a console or a menu (key catchers 0x11) keeps them where they were.
+// The keyboard's player 2: the event loop's key events (rva 0xd0f80, called at 0x1fbc1d) run with context 1 live, so the keys press his kbuttons (in the swapped input block).
+// Player 2 does not work the menus (owner, 2026-10-28: he only pauses the game): while a menu is open (key catchers 0x10) his key presses go nowhere; the console (0x1) takes them.
 static void (*key_event_original)(int, int, int, unsigned);
 static void key_event_hook(int lc, int key, int down, unsigned time)
 {
-	if (native_active && kb_player() == 1 && ctx1_ready && ctx_current == 0 && !(*(unsigned *)(base + 0x533cb0) & 0x11)) {
+	unsigned catchers = *(unsigned *)(base + 0x533cb0);
+	if (native_active && kb_player() == 1 && (catchers & 0x10) && !(catchers & 0x1) && down)
+		return;
+	if (native_active && kb_player() == 1 && ctx1_ready && ctx_current == 0 && !(catchers & 0x11)) {
 		ctx_swap(1);
 		key_event_original(lc, key, down, time);
 		ctx_swap(0);

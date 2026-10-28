@@ -133,12 +133,18 @@ static const ModString strings[] = {
 	// Второй игрок: нажмите любую кнопку на своём устройстве (the lobby's hint line)
 	{"MW2COOP_SPLIT_HINT", "\xc2\xf2\xee\xf0\xee\xe9\x20\xe8\xe3\xf0\xee\xea\x3a\x20\xed\xe0\xe6\xec\xe8\xf2\xe5\x20\xeb\xfe\xe1\xf3\xfe\x20\xea\xed\xee\xef\xea\xf3\x20\xed\xe0\x20\xf1\xe2\xee\xb8\xec\x20\xf3\xf1\xf2\xf0\xee\xe9\xf1\xf2\xe2\xe5",
 	 "Second player: press any button on your device"},
+	// Альфа / Браво: the split screen lobby's player cards (call signs, owner 2026-10-28)
+	{"MW2COOP_CALLSIGN_A", "\xc0\xeb\xfc\xf4\xe0", "Alpha"},
+	{"MW2COOP_CALLSIGN_B", "\xc1\xf0\xe0\xe2\xee", "Bravo"},
+	// (Back: отменить) / (Backspace: отменить): how a player takes his device choice back
+	{"MW2COOP_SPLIT_CANCEL_PAD", " (Back: \xee\xf2\xec\xe5\xed\xe8\xf2\xfc)", " (Back: cancel)"},
+	{"MW2COOP_SPLIT_CANCEL_KB", " (Backspace: \xee\xf2\xec\xe5\xed\xe8\xf2\xfc)", " (Backspace: cancel)"},
 	// Игрок 1: / Игрок 2: (the split screen lobby's hint line: each player presses a button on his device)
 	{"MW2COOP_SPLIT_P1", "\xc8\xe3\xf0\xee\xea 1: ", "Player 1: "},
 	{"MW2COOP_SPLIT_P2", "\xc8\xe3\xf0\xee\xea 2: ", "Player 2: "},
-	// нажмите кнопку на клавиатуре или геймпаде
-	{"MW2COOP_SPLIT_PRESS", "\xed\xe0\xe6\xec\xe8\xf2\xe5 \xea\xed\xee\xef\xea\xf3 \xed\xe0 \xea\xeb\xe0\xe2\xe8\xe0\xf2\xf3\xf0\xe5 \xe8\xeb\xe8 \xe3\xe5\xe9\xec\xef\xe0\xe4\xe5",
-	 "press a button on the keyboard or a gamepad"},
+	// нажмите кнопку на своём устройстве / (клавиатура или геймпад), on two lines
+	{"MW2COOP_SPLIT_PRESS", "\xed\xe0\xe6\xec\xe8\xf2\xe5 \xea\xed\xee\xef\xea\xf3 \xed\xe0 \xf1\xe2\xee\xb8\xec \xf3\xf1\xf2\xf0\xee\xe9\xf1\xf2\xe2\xe5\n(\xea\xeb\xe0\xe2\xe8\xe0\xf2\xf3\xf0\xe0 \xe8\xeb\xe8 \xe3\xe5\xe9\xec\xef\xe0\xe4)",
+	 "press a button on your device\n(keyboard or gamepad)"},
 	// клавиатура и мышь
 	{"MW2COOP_SPLIT_KEYBOARD", "\xea\xeb\xe0\xe2\xe8\xe0\xf2\xf3\xf0\xe0 \xe8 \xec\xfb\xf8\xfc", "keyboard and mouse"},
 	// геймпад %d
