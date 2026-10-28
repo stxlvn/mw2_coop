@@ -1981,9 +1981,12 @@ static void snapshot_msg_hook(void *msg, int time)
 		ctx_swap(was);
 }
 
-// ---- player 1's pad ([native] p1pad=<0-3>, -1 none): read in context 1's client frame, with context 1 live.
-// Stick left: movement (analog, into the usercmd by make_cmd_hook), stick right: the view (the view angle accumulators of context 1's block, rva 0x533d14 pitch / 0x533d18 yaw,
-// degrees), the buttons run the game's own key bindings for context 1's kbuttons (rva 0xd1810 name -> index, 0xce450 run it for the local client with a key number no keyboard sends).
+// ---- the players' devices: [native] p0pad (player 1, the top half) and p1pad (player 2): an XInput pad 0-3, or -1 for the keyboard and mouse. A player's pad is read in his
+// own context's client frame, with his context live. Stick left: movement (analog, into the usercmd by make_cmd_hook), stick right: the view (the view angle accumulators of the
+// live block, rva 0x533d14 pitch / 0x533d18 yaw, degrees), the buttons run the game's own actions for the live kbuttons (rva 0xd1810 name -> index in the action table at rva
+// 0x3be770, 0xce450 runs it for the local client with a key number no keyboard sends). The layout is the console's: A jump, B stance (hold: prone, cl_stanceHoldTime),
+// X reload (hold: use), Y next weapon, LB special grenade, RB frag, LT aim, RT fire, LS sprint / hold breath, RS melee, d-pad the action slots, Back objectives, Start pause.
+// In a menu (key catchers 0x10) the pad sends the keys a menu knows: d-pad / left stick arrows, A Enter, B / Start Escape.
 typedef struct {
 	WORD buttons;
 	BYTE lt, rt;
@@ -1994,137 +1997,229 @@ typedef struct {
 	xin_gamepad_t pad;
 } xin_state_t;
 static DWORD(WINAPI *xinput_get)(DWORD, xin_state_t *);
-static int p1pad = -1;
-static int pad_forward, pad_right; // -127..127, for the usercmd of this frame
-static int pad_active;
-
-static void pad_binding(const char *name, int down)
+static int pad_dev[2] = {-1, -1}; // per player: an XInput pad 0-3, or -1 (the keyboard and mouse)
+#define p1pad pad_dev[1]
+typedef struct {
+	int forward, right; // -127..127, for the usercmd of this frame
+	int active;         // the pad is connected
+	WORD held;
+	int rt, lt;
+	DWORD last_tick;
+	WORD menu_held;
+	DWORD menu_repeat; // when a held direction in a menu sends its key again
+} pad_player_t;
+static pad_player_t pads[2];
+// the player whose context gets the keyboard and the mouse: player 2 only when player 1 plays on a pad and player 2 on none
+static int kb_player(void)
 {
-	char full[48];
-	snprintf(full, sizeof(full), "%c%s", down ? '+' : '-', name);
-	int index = ((int (*)(const char *))(base + 0xd1810))(full);
+	return pad_dev[0] >= 0 && pad_dev[1] < 0 ? 1 : 0;
+}
+
+// an action of the table at rva 0x3be770 by its name ("+attack" / "-attack", "weapnext"), for local client 0 of the live context
+static void pad_action(const char *name)
+{
+	int index = ((int (*)(const char *))(base + 0xd1810))(name);
 	if (!index) {
-		static int logged[64];
+		static char logged[16][24];
 		static int count;
-		int already = 0;
 		for (int i = 0; i < count; i++)
-			already |= logged[i] == (int)full[1] * 256 + (int)full[2];
-		if (!already && count < 64) {
-			logged[count++] = (int)full[1] * 256 + (int)full[2];
-			log_printf("native: pad: no binding '%s'", full);
-		}
+			if (!strcmp(logged[i], name))
+				return;
+		if (count < 16)
+			snprintf(logged[count++], sizeof(logged[0]), "%s", name);
+		log_printf("native: pad: no action '%s'", name);
 		return;
 	}
 	((void (*)(int, int, int))(base + 0xce450))(0, index, 0x1ff);
 }
-
-static void pad_frame(void)
+static void pad_binding(const char *name, int down)
 {
-	if (p1pad < 0)
+	char full[48];
+	snprintf(full, sizeof(full), "%c%s", down ? '+' : '-', name);
+	pad_action(full);
+}
+
+// the engine's key event (rva 0xd0f80: local client, key, down, time), for a menu: K_ENTER 13, K_ESCAPE 27, K_UPARROW 154 .. K_RIGHTARROW 157 (the key name table at rva 0x3bdb70)
+static void pad_key(int key, int down)
+{
+	((void (*)(int, int, int, unsigned))(base + 0xd0f80))(0, key, down, (unsigned)GetTickCount());
+}
+
+// a stick with a radial dead zone: the length past the dead zone is rescaled to 0..1 and raised to the response curve's exponent
+static void pad_stick(float *x, float *y, float dead, float curve)
+{
+	float m = sqrtf(*x * *x + *y * *y);
+	if (m <= dead) {
+		*x = *y = 0;
 		return;
+	}
+	float n = (m > 1.0f ? 1.0f : m);
+	n = powf((n - dead) / (1.0f - dead), curve);
+	*x = *x / m * n;
+	*y = *y / m * n;
+}
+
+static int pad_read(int pl, xin_state_t *st)
+{
 	if (!xinput_get) {
 		HMODULE m = LoadLibraryA("xinput1_4.dll");
 		if (!m)
 			m = LoadLibraryA("xinput1_3.dll");
+		if (!m)
+			m = LoadLibraryA("xinput9_1_0.dll");
 		if (m)
 			xinput_get = (DWORD(WINAPI *)(DWORD, xin_state_t *))GetProcAddress(m, "XInputGetState");
 		if (!xinput_get) {
-			log_printf("native: no XInput, player 1 has no pad");
-			p1pad = -1;
-			return;
+			static int logged;
+			if (!logged++)
+				log_printf("native: no XInput, no pads");
+			return 0;
 		}
 	}
-	xin_state_t st;
-	memset(&st, 0, sizeof(st));
-	static DWORD last_tick;
-	DWORD now = GetTickCount();
-	float dt = last_tick ? (now - last_tick) / 1000.0f : 0.016f;
-	last_tick = now;
-	if (dt > 0.1f)
-		dt = 0.1f;
-	int have = xinput_get((DWORD)p1pad, &st) == 0;
-	{ // QA: mw2coopakepad.txt "lx ly rx ry buttons lt rt" (stick values -32767..32767, buttons as the XInput mask) stands in for a pad
-		static DWORD checked;
-		static int fake_have;
-		static int f[7];
-		if (now - checked > 250) {
-			checked = now;
+	memset(st, 0, sizeof(*st));
+	int have = xinput_get((DWORD)pad_dev[pl], st) == 0;
+	{ // QA: mw2coop\fakepad.txt "lx ly rx ry buttons lt rt" (stick values -32767..32767, buttons as the XInput mask) stands in for player 2's pad, fakepad0.txt for player 1's
+		static DWORD checked[2];
+		static int fake_have[2];
+		static int f[2][7];
+		DWORD now = GetTickCount();
+		if (now - checked[pl] > 250) {
+			checked[pl] = now;
 			char path[MAX_PATH];
 			lstrcpyA(path, settings_path);
 			char *slash = strrchr(path, '\\');
 			if (slash) {
-				lstrcpyA(slash + 1, "fakepad.txt");
+				lstrcpyA(slash + 1, pl ? "fakepad.txt" : "fakepad0.txt");
 				FILE *fp = fopen(path, "r");
-				fake_have = 0;
+				fake_have[pl] = 0;
 				if (fp) {
-					fake_have = fscanf(fp, "%d %d %d %d %d %d %d", &f[0], &f[1], &f[2], &f[3], &f[4], &f[5], &f[6]) == 7;
+					fake_have[pl] = fscanf(fp, "%d %d %d %d %d %d %d", &f[pl][0], &f[pl][1], &f[pl][2], &f[pl][3], &f[pl][4], &f[pl][5], &f[pl][6]) == 7;
 					fclose(fp);
 				}
 			}
 		}
-		if (fake_have) {
-			st.pad.lx = (SHORT)f[0], st.pad.ly = (SHORT)f[1], st.pad.rx = (SHORT)f[2], st.pad.ry = (SHORT)f[3];
-			st.pad.buttons = (WORD)f[4], st.pad.lt = (BYTE)f[5], st.pad.rt = (BYTE)f[6];
+		if (fake_have[pl]) {
+			st->pad.lx = (SHORT)f[pl][0], st->pad.ly = (SHORT)f[pl][1], st->pad.rx = (SHORT)f[pl][2], st->pad.ry = (SHORT)f[pl][3];
+			st->pad.buttons = (WORD)f[pl][4], st->pad.lt = (BYTE)f[pl][5], st->pad.rt = (BYTE)f[pl][6];
 			have = 1;
 		}
 	}
-	if (!have) { // no pad: no input
-		pad_forward = pad_right = 0;
-		pad_active = 0;
-		return;
-	}
-	pad_active = 1;
-	const float dead = 0.2f;
-	float lx = st.pad.lx / 32767.0f, ly = st.pad.ly / 32767.0f, rx = st.pad.rx / 32767.0f, ry = st.pad.ry / 32767.0f;
-	if (lx * lx + ly * ly < dead * dead)
-		lx = ly = 0;
-	if (rx * rx + ry * ry < dead * dead)
-		rx = ry = 0;
-	pad_forward = (int)(ly * 127.0f);
-	pad_right = (int)(lx * 127.0f);
-	float *acc = (float *)(base + 0x533d14); // context 1 is live here
-	acc[1] -= rx * 160.0f * dt; // yaw
-	acc[0] -= ry * 110.0f * dt; // pitch (down is positive)
-	if (acc[0] > 80.0f)
-		acc[0] = 80.0f;
-	if (acc[0] < -80.0f)
-		acc[0] = -80.0f;
+	return have;
+}
+
+// a menu has the keys (key catchers of local client 0, rva 0x533cb0, bit 0x10): the pad of either player moves through it (a held direction repeats after 400 ms, then every 120 ms)
+static void pad_menu(int pl, const xin_state_t *st)
+{
+	pad_player_t *p = &pads[pl];
+	WORD b = st->pad.buttons;
+	float lx = st->pad.lx / 32767.0f, ly = st->pad.ly / 32767.0f;
+	if (ly > 0.6f)
+		b |= 0x0001;
+	if (ly < -0.6f)
+		b |= 0x0002;
+	if (lx < -0.6f)
+		b |= 0x0004;
+	if (lx > 0.6f)
+		b |= 0x0008;
 	static const struct {
 		WORD mask;
-		const char *binding;
-		const char *second;
+		int key;
+	} keys[] = {{0x0001, 154}, {0x0002, 155}, {0x0004, 156}, {0x0008, 157}, {0x1000, 13}, {0x2000, 27}, {0x0010, 27}};
+	DWORD now = GetTickCount();
+	for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+		int was = (p->menu_held & keys[i].mask) != 0, is = (b & keys[i].mask) != 0;
+		int send = is && !was;
+		if (is && was && i < 4 && (int)(now - p->menu_repeat) >= 0)
+			send = 1;
+		if (!send)
+			continue;
+		pad_key(keys[i].key, 1);
+		pad_key(keys[i].key, 0);
+		if (i < 4)
+			p->menu_repeat = now + (was ? 120 : 400);
+	}
+	p->menu_held = b;
+}
+
+// one player's pad, his context live; play=0 reads it for the menus only (his context is not drawn: one picture)
+static void pad_frame_player(int pl, int play)
+{
+	pad_player_t *p = &pads[pl];
+	if (pad_dev[pl] < 0)
+		return;
+	xin_state_t st;
+	DWORD now = GetTickCount();
+	float dt = p->last_tick ? (now - p->last_tick) / 1000.0f : 0.016f;
+	p->last_tick = now;
+	if (dt > 0.1f)
+		dt = 0.1f;
+	if (!pad_read(pl, &st)) { // no pad: no input
+		p->forward = p->right = 0;
+		p->active = 0;
+		return;
+	}
+	p->active = 1;
+	if (*(unsigned *)(base + 0x533cb0) & 0x10) { // a menu
+		pad_menu(pl, &st);
+		p->forward = p->right = 0;
+		return;
+	}
+	p->menu_held = st.pad.buttons; // (a button that closed a menu does not act in the game too)
+	if (!play)
+		return;
+	const float move_dead = CFG_ONCE("padmovedead", 18) / 100.0f, look_dead = CFG_ONCE("paddead", 22) / 100.0f;
+	const float curve = CFG_ONCE("padcurve", 160) / 100.0f, trig = CFG_ONCE("padtrigger", 30) * 255 / 100.0f;
+	float lx = st.pad.lx / 32767.0f, ly = st.pad.ly / 32767.0f, rx = st.pad.rx / 32767.0f, ry = st.pad.ry / 32767.0f;
+	pad_stick(&lx, &ly, move_dead, 1.0f);
+	pad_stick(&rx, &ry, look_dead, curve);
+	p->forward = (int)(ly * 127.0f);
+	p->right = (int)(lx * 127.0f);
+	float scale = p->lt ? CFG_ONCE("padads", 42) / 100.0f : 1.0f;
+	float *acc = (float *)(base + 0x533d14); // the live context's
+	acc[1] -= rx * (float)CFG_ONCE("padyaw", 180) * scale * dt; // yaw
+	acc[0] += (CFG_ONCE("padinvert", 0) ? 1.0f : -1.0f) * ry * (float)CFG_ONCE("padpitch", 130) * scale * dt; // pitch (down is positive)
+	if (acc[0] > 85.0f)
+		acc[0] = 85.0f;
+	if (acc[0] < -85.0f)
+		acc[0] = -85.0f;
+	static const struct {
+		WORD mask;
+		const char *hold;  // a held button (+/-)
+		const char *press; // an action on the press
 	} map[] = {
-	    {0x1000, "gostand", NULL}, // A
-	    {0x2000, "stance", NULL},  // B
-	    {0x4000, "reload", "activate"}, // X
-	    {0x0100, "smoke", NULL},   // left bumper
-	    {0x0200, "frag", NULL},    // right bumper
+	    {0x1000, "gostand", NULL},       // A
+	    {0x2000, "stance", NULL},        // B (held: prone)
+	    {0x4000, "usereload", NULL},     // X (held: use)
+	    {0x8000, NULL, "weapnext"},      // Y
+	    {0x0100, "smoke", NULL},         // left bumper
+	    {0x0200, "frag", NULL},          // right bumper
 	    {0x0040, "breath_sprint", NULL}, // left stick
-	    {0x0080, "melee", NULL},   // right stick
-	    {0x0001, "actionslot 1", NULL}, // d-pad
-	    {0x0002, "actionslot 2", NULL},
-	    {0x0004, "actionslot 3", NULL},
-	    {0x0008, "actionslot 4", NULL},
+	    {0x0080, "melee", NULL},         // right stick
+	    {0x0020, "scores", NULL},        // Back: the objectives
+	    {0x0010, NULL, "togglemenu"},    // Start: pause
+	    {0x0001, "actionslot 1", NULL},  // d-pad up
+	    {0x0002, "actionslot 2", NULL},  // d-pad down
+	    {0x0004, "actionslot 3", NULL},  // d-pad left
+	    {0x0008, "actionslot 4", NULL},  // d-pad right
 	};
-	static WORD held;
-	static int rt_held, lt_held;
 	WORD buttons = st.pad.buttons;
 	for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
-		int was = (held & map[i].mask) != 0, is = (buttons & map[i].mask) != 0;
+		int was = (p->held & map[i].mask) != 0, is = (buttons & map[i].mask) != 0;
 		if (was == is)
 			continue;
-		pad_binding(map[i].binding, is);
-		if (map[i].second)
-			pad_binding(map[i].second, is);
+		if (map[i].hold)
+			pad_binding(map[i].hold, is);
+		else if (map[i].press && is)
+			pad_action(map[i].press);
 	}
-	held = buttons;
-	int rt = st.pad.rt > 80, lt = st.pad.lt > 80;
-	if (rt != rt_held)
+	p->held = buttons;
+	int rt = st.pad.rt > trig, lt = st.pad.lt > trig;
+	if (rt != p->rt)
 		pad_binding("attack", rt);
-	if (lt != lt_held)
+	if (lt != p->lt)
 		pad_binding("speed_throw", lt);
-	rt_held = rt;
-	lt_held = lt;
+	p->rt = rt;
+	p->lt = lt;
 }
 
 // Mode 9: the engine is told the screen is a half (width x height/2) while the client frame records its views and its 2D: its viewport, the 2D placement and the text are made for the
@@ -2314,7 +2409,7 @@ static void client_frame_hook(void)
 				log_printf("native: qa: player 1 aims down the sights");
 			}
 		}
-		pad_frame();
+		pad_frame_player(1, 1);
 		if (split_on)
 			video_push();
 		client_frame_original();
@@ -2326,6 +2421,9 @@ static void client_frame_hook(void)
 		*(int *)(np_dvar + 0x10) = 0;
 	if (nogun && gun_dvar)
 		*(int *)(gun_dvar + 0x10) = 1;
+	pad_frame_player(0, 1);
+	if (!(mode >= 5 && ctx1_ready && split_on))
+		pad_frame_player(1, 0); // one picture: player 2's pad still works the menus
 	if (split_on && ctx1_ready)
 		video_push();
 	else if (!split_on)
@@ -2351,7 +2449,7 @@ static float wait_alpha_hook(int lc)
 static void (*mouse_read_original)(long long, float *, float *);
 static void mouse_read_hook(long long state, float *x, float *y)
 {
-	if (ctx_current == 1) {
+	if (ctx_current != (native_active ? kb_player() : 0)) { // not the mouse's player (left unread: it stays for his context)
 		*x = 0;
 		*y = 0;
 		return;
@@ -2361,12 +2459,26 @@ static void mouse_read_hook(long long state, float *x, float *y)
 static void (*mouse_read2_original)(long long, float *, float *);
 static void mouse_read2_hook(long long state, float *x, float *y)
 {
-	if (ctx_current == 1) {
+	if (ctx_current != (native_active ? kb_player() : 0)) { // not the mouse's player (left unread: it stays for his context)
 		*x = 0;
 		*y = 0;
 		return;
 	}
 	mouse_read2_original(state, x, y);
+}
+
+// The keyboard's player 2: the event loop's key events (rva 0xd0f80, called at 0x1fbc1d) run with context 1 live, so the keys press his kbuttons (in the swapped input block);
+// a console or a menu (key catchers 0x11) keeps them where they were.
+static void (*key_event_original)(int, int, int, unsigned);
+static void key_event_hook(int lc, int key, int down, unsigned time)
+{
+	if (native_active && kb_player() == 1 && ctx1_ready && ctx_current == 0 && !(*(unsigned *)(base + 0x533cb0) & 0x11)) {
+		ctx_swap(1);
+		key_event_original(lc, key, down, time);
+		ctx_swap(0);
+		return;
+	}
+	key_event_original(lc, key, down, time);
 }
 
 // The keyboard and the pad reach context 1 too (the keys are read by the same input code): its usercmd, made by 0xd03a0 (called at 0xcf8b1), loses its buttons and movement,
@@ -2382,13 +2494,15 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 		if (qa_c0_fire)
 			*(int *)(cmd + 4) |= 1;
 	}
-	if (ctx_current == 1 && cmd) {
-		if (qa_ctx1_buttons) { // QA ([native] qa_ads1): the buttons the QA pressed for player 1 reach the server although he has no pad
+	if ((ctx_current == 0 || ctx_current == 1) && cmd && native_active) {
+		int pl = ctx_current;
+		pad_player_t *p = &pads[pl];
+		if (pl == 1 && qa_ctx1_buttons) { // QA ([native] qa_ads1): the buttons the QA pressed for player 2 reach the server although he has no pad
 			cmd[0x1a] = cmd[0x1b] = cmd[0x1c] = cmd[0x1d] = 0;
-		} else if (p1pad >= 0 && pad_active) {
-			cmd[0x1a] = (uint8_t)(int8_t)pad_forward; // usercmd_s: forwardmove +0x1a, rightmove +0x1b, upmove +0x1c, downmove +0x1d
-			cmd[0x1b] = (uint8_t)(int8_t)pad_right;
-		} else {
+		} else if (pad_dev[pl] >= 0 && p->active && (p->forward || p->right || kb_player() != pl)) {
+			cmd[0x1a] = (uint8_t)(int8_t)p->forward; // usercmd_s: forwardmove +0x1a, rightmove +0x1b, upmove +0x1c, downmove +0x1d
+			cmd[0x1b] = (uint8_t)(int8_t)p->right;
+		} else if (pl == 1 && kb_player() != 1 && !(pad_dev[1] >= 0 && p->active)) { // player 2 with no device: still
 			*(int *)(cmd + 4) = 0;
 			cmd[0x1a] = cmd[0x1b] = cmd[0x1c] = cmd[0x1d] = 0;
 		}
@@ -3209,6 +3323,8 @@ static void contexts_install(void)
 			log_printf("native: local slot function bytes differ");
 		if (!jhook_function(base + 0xcb4f0, msgwin_bytes, sizeof(msgwin_bytes), msgwin_hook, (void **)&msgwin_original))
 			log_printf("native: game message window draw bytes differ");
+		if (!jhook_call(base + 0x1fbc1d, key_event_hook, (void **)&key_event_original))
+			log_printf("native: no call at the event loop's key event");
 		if (cfg("titles", 1) && !jhook_function(base + 0xa3b80, hudelem_bytes, sizeof(hudelem_bytes), hudelem_hook, (void **)&hudelem_original))
 			log_printf("native: HUD element draw bytes differ");
 		if (cfg("namefix", 1)) {
@@ -3218,6 +3334,7 @@ static void contexts_install(void)
 		}
 	}
 	p1pad = cfg("p1pad", -1);
+	pad_dev[0] = cfg("p0pad", -1);
 	skip_hud_mask = cfg("skiphud", 0);
 	skip_ctx = cfg("skipctx", 1);
 	if (cfg("entclean", 1) &&
