@@ -3326,6 +3326,34 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 	static int on = -1;
 	if (on < 0)
 		on = cfg("dobjlog", 0);
+	if (a && CFG_ONCE("dobjmodels", 0) && ((ctx_current == 1 && (c & 0xffff) == 0) || (ctx_current == 0 && (c & 0xffff) == 1)) && !IsBadReadPtr(a, 0xb0)) { // QA: the models of a body's DObj (names), twice a second
+		static DWORD at[2];
+		if (GetTickCount() - at[ctx_current] >= 500) {
+			at[ctx_current] = GetTickCount();
+			const uint8_t *dobj = (const uint8_t *)a;
+			int n = dobj[0xd];
+			const uint8_t *const *models = *(const uint8_t *const **)(dobj + 0xa8);
+			char line[600];
+			int len = snprintf(line, sizeof(line), "native: dobjmodels ctx %d ent %u dobj %p models %d:", ctx_current, c & 0xffff, a, n);
+			for (int i = 0; models && i < n && i < 8 && len < (int)sizeof(line) - 80; i++) {
+				const char *name = models[i] && !IsBadReadPtr(models[i], 8) && !IsBadReadPtr(*(const char *const *)models[i], 4) ? *(const char *const *)models[i] : "?";
+				len += snprintf(line + len, sizeof(line) - len, " %s", name);
+			}
+			log_printf("%s", line);
+			for (int h = 0; h < 2; h++) { // the engine's own DObj of entity h, and the slot's client number the draw looked it up by
+				const uint8_t *pool = ((const uint8_t *(*)(int))(base + 0x1fece0))(h);
+				int nm = pool ? pool[0xd] : -1;
+				const uint8_t *const *mm = pool ? *(const uint8_t *const **)(pool + 0xa8) : NULL;
+				char names[300] = "";
+				for (int i = 0; mm && i < nm && i < 6 && strlen(names) < 200; i++) {
+					const char *nn = mm[i] && !IsBadReadPtr(mm[i], 8) && !IsBadReadPtr(*(const char *const *)mm[i], 4) ? *(const char *const *)mm[i] : "?";
+					snprintf(names + strlen(names), sizeof(names) - strlen(names), " %s", nn);
+				}
+				log_printf("native: dobjmodels   pool[%d] %p models %d:%s | slot0 clientnum %u slot1 clientnum %u", h, (const void *)pool, nm, names,
+					   (unsigned)*(const uint16_t *)(base + 0x441070 + 0x15e), (unsigned)*(const uint16_t *)(base + 0x441070 + 0x1a8 + 0x15e));
+			}
+		}
+	}
 	if (ctx_current == 0 && (c & 0xffff) == 1)
 		p0cnt_flags0 = d;
 	if (CFG_ONCE("p0cnt", 0) >= 2 && ((ctx_current == 0 && (c & 0xffff) == 1) || (ctx_current == 1 && (c & 0xffff) == 0))) {
@@ -3434,20 +3462,42 @@ static void own_write_hook(unsigned lc)
 	static int on = -1;
 	if (on < 0)
 		on = cfg("ownpos", 1);
-	if ((ctx_current == 0 || ctx_current == 1) && CFG_ONCE("entdump", 0)) { // QA: the cg_entities slots 0 and 1 of each context, as dwords (which fields carry a body's weapon)
+	if ((ctx_current == 0 || ctx_current == 1) && CFG_ONCE("entdump", 0)) { // QA: the cg_entities slots 0 and 1 of each context: the dwords that changed since the last look (which fields carry a body's weapon)
 		static DWORD at[2];
-		static int dumps[2];
-		if (split_tick && GetTickCount() - split_tick >= (DWORD)CFG_ONCE("entdump", 0) * 1000 && GetTickCount() - at[ctx_current] >= 3000 && dumps[ctx_current] < 6) {
+		static uint32_t before[2][2][0x1a8 / 4];
+		static int have[2];
+		if (split_tick && GetTickCount() - split_tick >= (DWORD)CFG_ONCE("entdump", 0) * 1000 && GetTickCount() - at[ctx_current] >= 500) {
 			at[ctx_current] = GetTickCount();
-			dumps[ctx_current]++;
 			for (int k = 0; k < 2; k++) {
 				const uint32_t *d = (const uint32_t *)(base + 0x441070 + (size_t)k * 0x1a8);
 				char line[1400];
 				int n = snprintf(line, sizeof(line), "native: entdump ctx %d ent %d:", ctx_current, k);
-				for (int i = 0; i < 0x1a8 / 4 && n < (int)sizeof(line) - 12; i++)
-					n += snprintf(line + n, sizeof(line) - n, " %x", d[i]);
-				log_printf("%s", line);
+				for (int i = 0; have[ctx_current] && i < 0x1a8 / 4 && n < (int)sizeof(line) - 24; i++)
+					if (d[i] != before[ctx_current][k][i] && i != 0 && i != 6 && i != 7 && i != 8 && i != 0x20 && i != 0x21 && i != 0x22)
+						n += snprintf(line + n, sizeof(line) - n, " %x:%x>%x", i * 4, before[ctx_current][k][i], d[i]);
+				if (have[ctx_current] && n > 30)
+					log_printf("%s", line);
+				memcpy(before[ctx_current][k], d, sizeof(before[0][0]));
 			}
+			have[ctx_current] = 1;
+		}
+	}
+	if (ctx_current == 0 && CFG_ONCE("psdiff", 0)) { // QA: the dwords of player 1's playerState (context 0's block) that changed since the last look (a weapon switch)
+		static uint32_t before[0xc00];
+		static int have;
+		static DWORD at;
+		if (GetTickCount() - at >= 500) {
+			at = GetTickCount();
+			const uint32_t *now = (const uint32_t *)(base + 0x535d38); // context 0 is live: its playerState is in the live block
+			char line[1200];
+			int n = snprintf(line, sizeof(line), "native: psdiff:");
+			for (int i = 0; have && i < 0xc00 && n < (int)sizeof(line) - 24; i++)
+				if (now[i] != before[i])
+					n += snprintf(line + n, sizeof(line) - n, " %x:%x>%x", i * 4, before[i], now[i]);
+			if (have && n > 20)
+				log_printf("%s", line);
+			memcpy(before, now, sizeof(before));
+			have = 1;
 		}
 	}
 	if (ctx_current == 1 && CFG_ONCE("pslog", 0)) {

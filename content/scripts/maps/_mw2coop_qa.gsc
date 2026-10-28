@@ -3596,12 +3596,16 @@ armed()
 		level waittill_notify_or_timeout( "introscreen_complete", 30 );
 	wait 2;
 	foreach ( player in level.players )
-	{
-		player GiveWeapon( "m4_grunt" );
-		player SwitchToWeapon( "m4_grunt" );
-	}
+		if ( player GetCurrentWeapon() == "none" )
+		{
+			player GiveWeapon( "m4_grunt" );
+			player SwitchToWeapon( "m4_grunt" );
+		}
+	wait 1;
 	p1 = level.player;
 	p2 = level.player2;
+	p1 thread armed_watch( "player 1" );
+	p2 thread armed_watch( "player 2" );
 	yaw = p1 GetPlayerAngles()[ 1 ];
 	ahead = p1.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 150;
 	p2 SetOrigin( PlayerPhysicsTrace( ahead + ( 0, 0, 48 ), ahead - ( 0, 0, 96 ) ) );
@@ -3614,5 +3618,48 @@ armed()
 		wait 0.05;
 	}
 	report( "player 1 holds " + p1 GetCurrentWeapon() + ", player 2 " + p2 GetCurrentWeapon() );
+	// player 2 changes to a pistol first: his body in player 1's half (the top one)
+	p2 GiveWeapon( "usp" );
+	p2 SwitchToWeapon( "usp" );
+	for ( t = 0; t < 80; t++ )
+	{
+		p1 SetPlayerAngles( VectorToAngles( p2 GetEye() - ( 0, 0, 20 ) - p1 GetEye() ) );
+		p2 SetPlayerAngles( VectorToAngles( p1 GetEye() - ( 0, 0, 20 ) - p2 GetEye() ) );
+		if ( t == 60 )
+			SetDvar( "mw2coop_qa_frame", "armed-p2usp" );
+		wait 0.05;
+	}
+	report( "player 2 changed to " + p2 GetCurrentWeapon() );
+	// player 1 changes to a pistol: his body in player 2's half must hold it (and the rifle again after)
+	p1 GiveWeapon( "usp" );
+	for ( round = 0; round < 2; round++ )
+	{
+		if ( round == 0 )
+			p1 SwitchToWeapon( "usp" );
+		else
+			p1 SwitchToWeapon( level.motiontrackergun_off );
+		for ( t = 0; t < 80; t++ )
+		{
+			p1 SetPlayerAngles( VectorToAngles( p2 GetEye() - ( 0, 0, 20 ) - p1 GetEye() ) );
+			p2 SetPlayerAngles( VectorToAngles( p1 GetEye() - ( 0, 0, 20 ) - p2 GetEye() ) );
+			if ( t == 60 )
+				SetDvar( "mw2coop_qa_frame", "armed-switched" + round );
+			wait 0.05;
+		}
+		text = "player 1 changed to " + p1 GetCurrentWeapon() + "; his attached models:";
+		for ( i = 0; i < p1 GetAttachSize(); i++ )
+			text = text + " " + p1 GetAttachModelName( i ) + "@" + p1 GetAttachTagName( i );
+		report( text + " (model " + p1.model + ")" );
+	}
 	report( "done" );
+}
+
+armed_watch( who )
+{
+	for ( ;; )
+	{
+		self waittill( "weaponchange" );
+		SetDvar( "mw2coop_qa_log", "weaponchange " + who + ": " + self GetCurrentWeapon() + ", model " + self GetPlayerWeaponModel() );
+		wait 0.3;
+	}
 }
