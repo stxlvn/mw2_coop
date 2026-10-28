@@ -108,6 +108,14 @@ key event 0xd0f80 at 0x1fbc1d, key catchers 0x533cb0, view accumulators 0x533d14
 player 1's pad in the lobby (mw2coop_menukey), the split lobby's title and hidden online rows; frame bursts (`shot.c`, no D3D device found in 32
 bits yet). Check each resource name too (materials, menus, localized strings): the 32-bit zones may differ.
 
+Added 2026-10-28 (late): aim assist (`native.c` aim_assist: aaGlob rva 0x3cf180 per context, the server's aim target list rva 0x3d0530 filled by
+aim_targets_update after each simulation step, the screen target update 0x6a570 at call 0xbd2c5, the list lookup 0x6a711, weapon def 0x85850; the aim_*
+dvars at 0x3cf050-0x3cf178 lose the cheat flag); vibration (`rumble.c`: the empty builtin 0xa650 behind PlayRumbleOnEntity & co, table entries 0x342e20 ..
+0x3c2168); pad options pages (`padopts.c`: built from `pc_options_look` / `pc_options_controls`, dvar register functions 0x26c930 / 0x26cb90); button
+pictures in texts (`padglyphs.c`: the key binding text 0xd0e40 at 0x2513ce and 0x1913fa, the text command's call of the text draw at 0x44c12, the inline
+picture format of 0x433b0, the material "white" as the template); red dot sights and the scene pass's depth-tested draws (`layer_to_scene`, the
+scene's last pass 0x63680 at 0x5c5bf). Open in 64 bits too: the body weapon of the other player (see the notes in docs/native-splitscreen-plan.md).
+
 ## Steps
 
 1. Done: the 32-bit proxy loads into the real game, logs, recognises the build, dumps the image.
