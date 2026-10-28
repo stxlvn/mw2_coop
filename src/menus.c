@@ -32,6 +32,7 @@
 #include "instance.h"
 #include "splitscreen.h"
 #include "native.h"
+#include "padicon.h"
 #include "log.h"
 #include "settings.h"
 #include "upnp.h"
@@ -792,6 +793,101 @@ static int item_by_text(uint8_t *menu, const char *text, const LobbySwap *w)
 	return -1;
 }
 
+#ifdef _WIN64
+// The native split screen lobby: both players are on this PC. The title says split screen instead of online, the rows that only an online lobby needs are hidden
+// (invite a friend, access, password, the network type), and each player's card shows the picture of his device (keyboard and mouse, a gamepad, none before he has
+// pressed). Everything goes back when the lobby is an online one again. The cards' pictures are the two 64 x 64 items at x -176 (y 70: player 1, y 148: player 2), whose
+// window background (Material *, ITEM_BACKGROUND_PTR) is the game's "pc_keyboard_mouse".
+static void patch_split_lobby(uint8_t *menu)
+{
+	static uint8_t *kb_material;
+	static uint8_t *cards[2], *title_item;
+	static void *title_native;
+	static int split_was;
+	int split = split_mode && native_split_available();
+	int count = *(int *)(menu + MENU_ITEM_COUNT);
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	if (!cards[0] || !cards[1] || !title_item) {
+		for (int i = 0; i < count; i++) {
+			uint8_t *it = items[i];
+			const float *rc = (const float *)(it + ITEM_RECT);
+			if (rc[0] == -176.0f && rc[2] == 64.0f && rc[3] == 64.0f && (rc[1] == 70.0f || rc[1] == 148.0f))
+				cards[rc[1] == 70.0f ? 0 : 1] = it;
+			const char *text = *(const char **)(it + ITEM_TEXT);
+			if (text && !strcmp(text, "@MENU_SP_TWO_PLAYER_ONLINE")) {
+				title_item = it;
+				title_native = *(void **)(it + ITEM_TEXT);
+			}
+		}
+		if (cards[0] && !kb_material)
+			kb_material = *(uint8_t **)(cards[0] + ITEM_BACKGROUND_PTR);
+	}
+	if (title_item)
+		*(const char **)(title_item + ITEM_TEXT) = split ? "@MW2COOP_SPLIT_TITLE" : (const char *)title_native;
+	static const char *const online_rows[] = {"invitefriend", "mw2coop_access", "mw2coop_password", "nattype"};
+	if (split || split_was) {
+		for (size_t r = 0; r < sizeof(online_rows) / sizeof(online_rows[0]); r++)
+			for (int i = 0; i < count; i++) {
+				const char *name = *(const char **)items[i];
+				if (name && !strcmp(name, online_rows[r])) {
+					uint32_t *flags = (uint32_t *)(items[i] + ITEM_DYNAMIC_FLAGS);
+					if (split)
+						*flags &= ~(WINDOW_VISIBLE | WINDOW_HASFOCUS);
+					else
+						*flags |= WINDOW_VISIBLE;
+				}
+			}
+	}
+	for (int pl = 0; pl < 2 && kb_material; pl++) {
+		if (!cards[pl])
+			continue;
+		uint8_t *want = kb_material;
+		int shown = 1;
+		if (split) {
+			int d = instance_device(pl);
+			shown = d != DEVICE_NONE; // no picture before the player has pressed a button on his device
+			want = d >= 0 ? (uint8_t *)padicon_material(kb_material) : kb_material;
+			if (!want)
+				want = kb_material; // (the gamepad picture is made once the keyboard's texture is there)
+		}
+		*(uint8_t **)(cards[pl] + ITEM_BACKGROUND_PTR) = want;
+		uint32_t *flags = (uint32_t *)(cards[pl] + ITEM_DYNAMIC_FLAGS);
+		if (shown)
+			*flags |= WINDOW_VISIBLE;
+		else
+			*flags &= ~WINDOW_VISIBLE;
+	}
+	// the friendly fire row moves up into the Ready row's place, right under the operation (Ready, Invite and Access are hidden), and
+	// back. It is a copy of the invite row, with its rules for greying out (disabled offline, as the split screen lobby is): those go
+	// in the split screen lobby (the row's command checks that this is the host) and come back for an online one
+	{
+		static uint8_t *seen; // the row as first seen (access.c makes it again when the UI is reloaded)
+		static float ff_y, ff_cy;
+		static void *ff_float_exps, *ff_disabled_exp;
+		uint8_t *ff = NULL, *ready = NULL;
+		for (int i = 0; i < count && (!ff || !ready); i++) {
+			const char *name = *(const char **)items[i];
+			if (name && !strcmp(name, "mw2coop_ff") && !ff)
+				ff = items[i];
+			if (name && !strcmp(name, "dont_selectdiff") && !ready)
+				ready = items[i];
+		}
+		if (ff && ff != seen) {
+			seen = ff, ff_y = *(float *)(ff + ITEM_RECT_Y), ff_cy = *(float *)(ff + ITEM_RECT_CLIENT_Y);
+			ff_float_exps = *(void **)(ff + ITEM_FLOAT_EXPS), ff_disabled_exp = *(void **)(ff + ITEM_DISABLED_EXP);
+		}
+		if (ff && ready) {
+			float dy = split ? *(float *)(ready + ITEM_RECT_Y) - ff_y : 0;
+			*(float *)(ff + ITEM_RECT_Y) = ff_y + dy;
+			*(float *)(ff + ITEM_RECT_CLIENT_Y) = ff_cy + dy;
+			*(void **)(ff + ITEM_FLOAT_EXPS) = split ? NULL : ff_float_exps;
+			*(void **)(ff + ITEM_DISABLED_EXP) = split ? NULL : ff_disabled_exp;
+		}
+	}
+	split_was = split;
+}
+#endif
+
 static void patch_lobby(int campaign)
 {
 	uint8_t *menu = ui_find_menu("coop_lobby");
@@ -825,6 +921,9 @@ static void patch_lobby(int campaign)
 		}
 	}
 	patch_lobby_mission(menu, campaign);
+#ifdef _WIN64
+	patch_split_lobby(menu);
+#endif
 	if (changed || campaign != lobby_campaign_set)
 		log_printf("menus: coop_lobby set for %s", campaign ? "a campaign mission" : "Spec Ops");
 	lobby_campaign_set = campaign;

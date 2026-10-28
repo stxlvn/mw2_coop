@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 LLVM_MINGW=${LLVM_MINGW:-../tools/llvm-mingw/llvm-mingw-20261006-ucrt-x86_64}
 CC="$LLVM_MINGW/bin/x86_64-w64-mingw32-clang"
 SRC="src/main.c src/log.c src/proxy.c src/hooks.c src/hook.c src/game.c src/control.c src/crash.c src/scripts.c src/localize.c src/memdump.c src/menus.c src/mirror.c src/transplant.c src/access.c src/settings.c src/upnp.c src/steamnet.c src/firewall.c src/zones.c src/net.c src/fonts.c src/splitscreen.c src/instance.c src/native.c
-	src/party.c src/progress.c src/scrdebug.c src/shot.c src/fov.c src/winmm_stubs.S src/winmm.def"
+	src/party.c src/progress.c src/scrdebug.c src/shot.c src/fov.c src/padicon.c src/winmm_stubs.S src/winmm.def"
 if [ "$1" = x86 ]; then
 	STRIP=; [ "$2" = release ] && STRIP=-s   # release: stripped, no local paths in the DLL
 	# the 32-bit build of the game (see docs/32bit-plan.md): only the first slice is ported so far
