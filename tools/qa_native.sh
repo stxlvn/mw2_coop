@@ -4,7 +4,8 @@
 #   MW2COOP_MAP     the map (default trainer)
 #   MW2COOP_PRE     extra console commands before the map, ";"-separated
 #   MW2COOP_POST    extra console commands after the level time, ";"-separated (the run is then LEVEL_S + their time long: give the script a bigger first argument)
-#   MW2COOP_LOBBY=1 the whole menu path: the split screen button, Continue, the pad of the second player, Start (the mission is the lobby's, not MW2COOP_MAP)
+#   MW2COOP_LOBBY=1 the whole menu path: the split screen button, Continue, the players' devices (MW2COOP_PAD player 2's pad, MW2COOP_PAD0 player 1's, -1 the keyboard), Start
+#                   (the mission is the lobby's, not MW2COOP_MAP); frames of the lobby before and after: mw2coop\shots\lobby-a.bmp, lobby-b.bmp
 #   MW2COOP_PLAIN=1 no native split screen at all: the game as it is (to see what the original draws)
 #   MW2COOP_MENU=1  the session is started the way the menu does it (console command mw2coop_native_launch), not by settings.ini; MW2COOP_PAD the second player's pad
 # Writes the copy's settings.ini and commands.txt, runs it, prints the native/split/crash lines and puts the composed frame in local/scratch/native-last.png.
@@ -43,8 +44,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 		echo "!sleep 2000"
 		echo "mw2coop_host_go"
 		echo "!sleep 4000"
-		echo "mw2coop_split_pad ${MW2COOP_PAD:-0}"
+		echo "!shot lobby-a"
+		echo "!sleep 500"
+		echo "mw2coop_split_pad ${MW2COOP_PAD:-0} ${MW2COOP_PAD0:--1}"
 		echo "!sleep 1500"
+		echo "!shot lobby-b"
+		echo "!sleep 500"
 		echo "mw2coop_start"
 	elif [ -n "${MW2COOP_PLAIN:-}" ]; then echo "devmap $MAP"
 	elif [ -n "${MW2COOP_MENU:-}" ]; then echo "mw2coop_native_launch $MAP ${MW2COOP_PAD:--1} ${MW2COOP_START:-}"; else echo "devmap $MAP"; fi

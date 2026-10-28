@@ -94,7 +94,7 @@ static void jhook_jump(uint8_t *target, size_t len, const void *replacement, uin
 // The settings of the split screen: settings.ini [native] for the QA runs; a session started from the menu uses the values the feature ships with (from_menu) unless the file says otherwise
 static int native_active;
 static int from_menu;
-static int menu_pad = -1;
+static int menu_pad = -1, menu_pad0 = -1; // the lobby's devices of player 2 and player 1 (-1: the keyboard and mouse)
 static int cfg(const char *key, int def)
 {
 	static const struct {
@@ -102,8 +102,10 @@ static int cfg(const char *key, int def)
 		int value;
 	} shipped[] = {{"experiment", 10}, {"players", 2}, {"coopdvar", 1}, {"p1cmd", 1}, {"listplayers", 1}, {"p1yawdeg", 0}, {"p0turn", 0}, {"ctx", 1}};
 	if (from_menu) {
-		if (!lstrcmpA(key, "p1pad") && menu_pad >= 0)
+		if (!lstrcmpA(key, "p1pad"))
 			return menu_pad;
+		if (!lstrcmpA(key, "p0pad"))
+			return menu_pad0;
 		for (size_t i = 0; i < sizeof(shipped) / sizeof(shipped[0]); i++)
 			if (!lstrcmpA(key, shipped[i].key))
 				def = shipped[i].value;
@@ -3538,15 +3540,22 @@ int native_split_active(void)
 	return native_active;
 }
 
-// The Start of a split screen lobby: the game becomes a two local players game; the caller launches the mission. pad: the XInput pad of the second player (-1: none yet)
-int native_split_start(int pad)
+// The Start of a split screen lobby: the game becomes a two local players game; the caller launches the mission. dev0 / dev1: the players' devices (an XInput pad 0-3,
+// -1 the keyboard and mouse)
+int native_split_start2(int dev0, int dev1)
 {
 	if (native_active)
 		return 1;
 	from_menu = 1;
-	menu_pad = pad;
-	p1pad = pad;
+	menu_pad0 = dev0;
+	menu_pad = dev1;
+	pad_dev[0] = dev0;
+	p1pad = dev1;
 	return activate(2);
+}
+int native_split_start(int pad)
+{
+	return native_split_start2(-1, pad);
 }
 
 // The session ends (back in the menus): the patches come out and the game is what it was
@@ -3584,6 +3593,11 @@ int native_split_active(void)
 int native_split_start(int pad)
 {
 	(void)pad;
+	return 0;
+}
+int native_split_start2(int dev0, int dev1)
+{
+	(void)dev0, (void)dev1;
 	return 0;
 }
 const char *native_crash_state(void)

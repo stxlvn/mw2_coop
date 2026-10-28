@@ -10,6 +10,7 @@ int native_split_available(void);
 int native_split_active(void);
 // The Start of a split screen lobby: the game becomes a two local players game; the caller launches the mission. pad: the XInput pad of the second player, -1 none. Returns 1 on success.
 int native_split_start(int pad);
+int native_split_start2(int dev0, int dev1); // each player's device: an XInput pad 0-3, or -1 the keyboard and mouse
 // The session ends (the game is back in the menus): the game's own player count comes back
 void native_split_stop(void);
 // For the crash log: which client context was live, the session state

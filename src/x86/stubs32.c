@@ -31,6 +31,12 @@ void shot_request(const char *name)
 	log_printf("shot: %s not saved (the 32-bit build cannot find the game's Direct3D device yet)", name);
 }
 
+void shot_burst_start(const char *prefix, int n, int x, int y, int w, int h)
+{
+	(void)n, (void)x, (void)y, (void)w, (void)h;
+	log_printf("shot: burst %s not saved (no Direct3D device in the 32-bit build yet)", prefix);
+}
+
 // Steam P2P for Steam joins (steam_relay=1, off by default and untested with two real accounts): not ported to the 32-bit build yet.
 void steamnet_install(void)
 {

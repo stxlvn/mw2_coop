@@ -1046,6 +1046,12 @@ int menus_on_packet(const char *buf, int len)
 	return 1;
 }
 
+// the native split screen lobby: both players pressed a button on their devices
+static int split_devices_chosen(void)
+{
+	return instance_device(0) != DEVICE_NONE && instance_device(1) != DEVICE_NONE;
+}
+
 static void update_texts(void)
 {
 	int host = base[RVA_PARTY_IS_HOST];
@@ -1056,7 +1062,9 @@ static void update_texts(void)
 		localize_select("MW2COOP_READY", my_ready ? "MW2COOP_READY_UNSET" : "MW2COOP_READY_SET");
 	show_row(ui_find_menu("coop_lobby"), "dont_selectdiff", !split_mode);
 	const char *start;
-	if (split_mode)
+	if (split_mode && native_split_available())
+		start = split_devices_chosen() ? "MW2COOP_START_GO" : "MW2COOP_START_NEED_DEVICES";
+	else if (split_mode)
 		start = instance_pad() < 0 ? "MW2COOP_START_NEED_PARTNER" : "MW2COOP_START_GO";
 	else if (!partner_present() || (host && !party_full()))
 		start = "MW2COOP_START_NEED_PARTNER";
@@ -1126,8 +1134,8 @@ static void native_launch(void)
 {
 	if (native_split_active()) // a second press of Start while the mission loads
 		return;
-	if (instance_pad() < 0) {
-		log_printf("menus: Start: the second player has not pressed a button on his device yet");
+	if (!split_devices_chosen()) {
+		log_printf("menus: Start: the players have not both pressed a button on their devices yet");
 		return;
 	}
 	char map[64] = "";
@@ -1136,11 +1144,12 @@ static void native_launch(void)
 		lstrcpyA(map, "trainer");
 	// the second player is a member of the save like a partner who joins it
 	progress_begin(continuing, "split-screen", 0x53504c4954ULL, "Player 2", 1);
-	if (!native_split_start(instance_pad())) {
+	int dev0 = instance_device(0), dev1 = instance_device(1);
+	if (!native_split_start2(dev0, dev1)) {
 		log_printf("menus: Start: the split screen could not be started");
 		return;
 	}
-	log_printf("menus: Start: native split screen, mission '%s', pad %d", map, instance_pad());
+	log_printf("menus: Start: native split screen, mission '%s', player 1 on %d, player 2 on %d (-1 keyboard)", map, dev0, dev1);
 	instance_assign_end();
 	InterlockedExchange(&split_mode, 0);
 	((void (*)(void))(base + RVA_PARTY_RESET))();
@@ -1537,7 +1546,29 @@ static void tick_f(void)
 	// a split screen lobby: until the second player has pressed a button on his device, the lobby's own hint line (bottom right, where the game says
 	// "double-click a friend's name for voice chat") tells him what to do
 	static int hint_shown;
-	if (split_mode && instance_pad() < 0) {
+	if (split_mode && native_split_available()) { // each player presses a button on his device: the line says who plays on what, and who is still to press
+		char line[256] = "", dev[64];
+		for (int pl = 0; pl < 2; pl++) {
+			int d = instance_device(pl);
+			const char *who = localize_text(pl ? "MW2COOP_SPLIT_P2" : "MW2COOP_SPLIT_P1");
+			const char *what;
+			if (d == DEVICE_NONE)
+				what = localize_text("MW2COOP_SPLIT_PRESS");
+			else if (d == DEVICE_KEYBOARD)
+				what = localize_text("MW2COOP_SPLIT_KEYBOARD");
+			else {
+				const char *f = localize_text("MW2COOP_SPLIT_PAD");
+				snprintf(dev, sizeof(dev), f ? f : "pad %d", d + 1);
+				what = dev;
+			}
+			size_t n = strlen(line);
+			snprintf(line + n, sizeof(line) - n, "%s%s%s", pl ? "    " : "", who ? who : "", what ? what : "");
+			if (d == DEVICE_NONE)
+				break; // player 2 is asked once player 1 has his device
+		}
+		localize_override("MENU_SP_STEAM_CHAT_HINT", line);
+		hint_shown = 1;
+	} else if (split_mode && instance_pad() < 0) {
 		const char *hint = localize_text("MW2COOP_SPLIT_HINT");
 		if (hint) {
 			localize_override("MENU_SP_STEAM_CHAT_HINT", hint);

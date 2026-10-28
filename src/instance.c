@@ -20,33 +20,62 @@ static char pad_file[2 * MAX_PATH];
 
 // ---------------------------------------------------------------- the lobby: the second player's device and Ready
 
-static volatile LONG assigned_pad = -1;
+static volatile LONG assigned_dev[2] = {DEVICE_NONE, DEVICE_NONE}; // the players' devices: DEVICE_NONE, DEVICE_KEYBOARD, or an XInput pad 0-3
 static volatile LONG second_ready;
 static volatile LONG assign_gen;
 
-// the lobby shows a hint (no popup): the second player presses a button on his device; the first pad that does is his
+// a key that went down on the keyboard since the last look, while the game window has the focus (the mouse's buttons are not the keyboard: the lobby is clicked with them)
+static int keyboard_pressed(void)
+{
+	static BYTE was[256];
+	DWORD pid = 0;
+	HWND fg = GetForegroundWindow();
+	GetWindowThreadProcessId(fg, &pid);
+	int any = 0;
+	for (int vk = 8; vk < 256; vk++) {
+		if (vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2)
+			continue;
+		BYTE down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+		if (down && !was[vk] && pid == GetCurrentProcessId())
+			any = 1;
+		was[vk] = down;
+	}
+	return any;
+}
+
+// The lobby's hint line tells each player to press a button on his device: the first device pressed is player 1's, the next other one player 2's. A pad is any of the four
+// XInput slots; the keyboard is any key. (Before this the first player was always the keyboard, and the second a pad.)
 static DWORD WINAPI assign_thread(LPVOID gen_arg)
 {
 	LONG gen = (LONG)(LONG_PTR)gen_arg;
-	int pad = -1;
-	for (int i = 0; i < 12000 && gen == assign_gen && pad < 0; i++) { // ten minutes
+	keyboard_pressed(); // the keys held while the lobby opened are not a press
+	for (int i = 0; i < 12000 && gen == assign_gen; i++) { // ten minutes
 		Sleep(50);
-		pad = splitscreen_poll_any_pad();
+		int slot = assigned_dev[0] == DEVICE_NONE ? 0 : assigned_dev[1] == DEVICE_NONE ? 1 : -1;
+		if (slot < 0)
+			return 0;
+		int dev = DEVICE_NONE;
+		int pad = splitscreen_poll_any_pad();
+		if (keyboard_pressed())
+			dev = DEVICE_KEYBOARD;
+		else if (pad >= 0)
+			dev = pad;
+		if (dev == DEVICE_NONE || (slot == 1 && dev == assigned_dev[0]))
+			continue;
+		if (gen != assign_gen)
+			return 0;
+		InterlockedExchange(&assigned_dev[slot], dev);
+		log_printf("instance: player %d plays on %s %d", slot + 1, dev == DEVICE_KEYBOARD ? "the keyboard" : "pad", dev == DEVICE_KEYBOARD ? 0 : dev);
+		menus_split_changed();
 	}
-	if (gen != assign_gen)
-		return 0;
-	if (pad < 0)
-		return 0;
-	InterlockedExchange(&assigned_pad, pad);
-	log_printf("instance: pad %d is the second player's", pad);
-	menus_split_changed();
 	return 0;
 }
 
 void instance_assign_begin(void)
 {
 	LONG gen = InterlockedIncrement(&assign_gen);
-	InterlockedExchange(&assigned_pad, -1);
+	InterlockedExchange(&assigned_dev[0], DEVICE_NONE);
+	InterlockedExchange(&assigned_dev[1], DEVICE_NONE);
 	InterlockedExchange(&second_ready, 0);
 	CreateThread(NULL, 0, assign_thread, (LPVOID)(LONG_PTR)gen, 0, NULL);
 }
@@ -54,13 +83,23 @@ void instance_assign_begin(void)
 void instance_assign_end(void)
 {
 	InterlockedIncrement(&assign_gen);
-	InterlockedExchange(&assigned_pad, -1);
+	InterlockedExchange(&assigned_dev[0], DEVICE_NONE);
+	InterlockedExchange(&assigned_dev[1], DEVICE_NONE);
 	InterlockedExchange(&second_ready, 0);
 }
 
+int instance_device(int player)
+{
+	return (int)assigned_dev[player & 1];
+}
+
+// the two-process split screen: player 1 is the keyboard, player 2 the pad (the first pad either player pressed)
 int instance_pad(void)
 {
-	return (int)assigned_pad;
+	for (int i = 0; i < 2; i++)
+		if (assigned_dev[i] >= 0)
+			return (int)assigned_dev[i];
+	return -1;
 }
 
 int instance_second_ready(void)
@@ -345,7 +384,10 @@ static void splitlaunch_f(void)
 static void split_pad_f(void)
 {
 	const char *a = game_cmd_argv(1);
-	InterlockedExchange(&assigned_pad, a[0] ? atoi(a) : 0);
+	// QA: mw2coop_split_pad <pad> [<player 1's: -1 keyboard>]: the second player's pad (and the first player's device)
+	InterlockedExchange(&assigned_dev[1], a[0] ? atoi(a) : 0);
+	const char *b = game_cmd_argv(2);
+	InterlockedExchange(&assigned_dev[0], b[0] ? atoi(b) : DEVICE_KEYBOARD);
 	menus_split_changed();
 }
 
