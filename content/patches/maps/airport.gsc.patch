@@ -31,6 +31,11 @@ if ( flag( "player_ready_for_proper_ending" ) )
 @@@ to
 maps\_mw2coop_airport::ending_deaths();
 @@@ end
+@@@ subst escape_end_sequence
+van thread anim_loop_solo( level.vanmate, "end_get_in_idle", "stop_loop", "origin_animate_jnt" );
+@@@ to
+maps\_mw2coop_airport::vanmate_idle( van );
+@@@ end
 
 2. Each shot hits its victim: his sounds, damage and white flash; the death vision with the
    last shot.

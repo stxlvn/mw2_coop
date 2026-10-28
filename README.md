@@ -81,10 +81,9 @@ Something wrong? Send `mw2coop\mw2coop.log` from both PCs.
 <a id="known-issues"></a>
 ## ⚠️ Known issues
 
-- Slow motion plays on both screens, whoever triggers it: both PCs run one game clock.
-- Checkpoints: restarting from one was tested in Team Player and S.S.D.D.; in the other missions bots only checked that each checkpoint exists, so one may come a little early or late.
-- No Russian's far ending (nobody at the van door) logs one script error (`_anim::anim_loop_packet`); the scene plays on.
-- Museum (the epilogue after the credits): in the bot tour player 2 could not walk or ended up far from player 1 at the exhibit start points; not fixed yet. Its civilians also spam script errors and some stand in a T-pose, in single player too.
+- Slow motion plays on both screens, whoever triggers it: both PCs run one game clock, so it cannot be shown to one player only.
+- Checkpoints: bots fail the mission in every section of every campaign mission, 64-bit and 32-bit, and check that the level starts again with both players up and together (all pass). A restart goes to the level's own checkpoint, which is sometimes the section before the one you died in. Not tried by two people yet.
+- Rarely (once in about a hundred mission loads, seen in the 32-bit build) both PCs hang right after a mission starts. A cause was found and fixed (see the changelog) but one hang does not prove it; if it happens, restart the mission and tell us.
 - Nobody has played the whole campaign through together yet: tell us how far you got.
 
 ## 🧪 How it's tested

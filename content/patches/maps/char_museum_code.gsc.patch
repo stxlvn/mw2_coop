@@ -16,3 +16,25 @@ level.player.ignoreme = false;
 @@@ to
 maps\_mw2coop::players_ignoreme( false );
 @@@ end
+
+3. The credits' camera carries both players (camera_move blends both onto it).
+@@@ subst camera_move
+level.player playerlinktoblend( level.camera, undefined, time );
+@@@ to
+maps\_mw2coop_ending::museum_link_blend( time, undefined, undefined );
+@@@ end
+@@@ subst camera_move
+level.player playerlinktoblend( level.camera, undefined, time, time * acc, time * dec );
+@@@ to
+maps\_mw2coop_ending::museum_link_blend( time, time * acc, time * dec );
+@@@ end
+
+4. The museum's talking civilians: their idle entries in level.scr_anim are single animations, and
+   _anim::anim_weight wants an array of looping animations (its AssertEx is stripped from the release, what is left
+   is "size cannot be applied", thousands of script errors a second and civilians in a T-pose, in single player too).
+   maps\_mw2coop_ending::civ_loop makes the entry an array first.
+@@@ subst civ_talkers
+node anim_generic_loop( self, node.animation );
+@@@ to
+maps\_mw2coop_ending::civ_loop( node, self );
+@@@ end

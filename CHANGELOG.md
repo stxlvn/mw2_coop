@@ -23,6 +23,13 @@ keyboard, the 32-bit build has the two-process split screen only.
 Everything here is in `main` and tested with bots on two game copies on one PC (host + client); none of it has
 been played through by two people yet.
 
+### Fixed: the Museum, missions in the lobby, a hang
+
+- **Museum for two.** The credits camera carries both players and each sees the museum, not the inside of the other's head (both are hidden from each other during the credits). The museum's civilians play their idles again: the game's animation tables for them were incomplete in the credits mode and the vanilla game raised ten million script errors there (and left civilians in a T-pose), in single player too.
+- **All missions can be picked in the co-op lobby** (issue #3): the host sees every mission of the campaign list as open, whatever his save says. Nothing is written to the profile, and his own Mission Select keeps its rules.
+- **A rare hang of both PCs after a mission start** (seen once in the 32-bit build): the game's asset database lookup `DB_IsXAssetDefault` did not give back the reader count it took when a name was missing, so the next writer waited for ever. Fixed in both builds.
+- QA: the checkpoint bots (`cptour`) now run on every campaign mission in 64-bit and 32-bit builds and count the level's own checkpoint remaps.
+
 ### New: fonts closer to the English original (Russian game)
 
 The Russian game draws every text in one generic condensed sans, while the English original uses Bank Gothic (headings,

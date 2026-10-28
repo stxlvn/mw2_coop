@@ -78,6 +78,8 @@ for call in ('allowcrouch( false );', 'allowprone( false );', 'setstance( "stand
     a.subst('escape_end_sequence', 'level.player ' + call, 'foreach ( p in level.players )\n\t\tp ' + call)
 a.subst('escape_end_sequence', 'if ( flag( "player_ready_for_proper_ending" ) )\n\t\tescape_animate_player_death();\n\telse\n\t\tescape_animate_player_death2();',
         M + 'ending_deaths();')
+a.subst('escape_end_sequence', 'van thread anim_loop_solo( level.vanmate, "end_get_in_idle", "stop_loop", "origin_animate_jnt" );',
+        M + 'vanmate_idle( van );')
 a.note('''2. Each shot hits its victim: his sounds, damage and white flash; the death vision with the
    last shot.''')
 a.subst('escape_kill_player', 'flag_set( "escape_player_shot" );', 'flag_set( "escape_player_shot" );\n\tvictim = ' + M + 'victim();')

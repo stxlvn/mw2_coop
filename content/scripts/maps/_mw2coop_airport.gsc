@@ -128,6 +128,10 @@ ending_deaths()
 			level.player maps\airport_code::escape_animate_player_death2();
 		return;
 	}
+	// the van mate stands in the line of Makarov's second shot (the far ending): without a shield the bullets kill him
+	// and his idle loop afterwards raises a script error (AnimScripted on a dead actor)
+	if ( isdefined( level.vanmate ) && IsAlive( level.vanmate ) && !isdefined( level.vanmate.magic_bullet_shield ) )
+		level.vanmate magic_bullet_shield();
 	first = victim();
 	second = maps\_mw2coop::other_player( first );
 	level.mw2coop_ending_victim = first;
@@ -139,6 +143,17 @@ ending_deaths()
 		first maps\airport_code::escape_animate_player_death2();
 	if ( isdefined( second ) && IsAlive( second ) )
 		second_shot( second );
+}
+
+// escape_end_sequence(), after the last shot: the van mate goes back to his idle in the van (the level
+// starts the loop with `van thread anim_loop_solo( level.vanmate ... )`).
+vanmate_idle( van )
+{
+	mate = level.vanmate;
+	if ( coop() )
+		maps\_mw2coop::state( "airport: van mate defined " + isdefined( mate ) + ", alive " + ( isdefined( mate ) && IsAlive( mate ) ) );
+	if ( isdefined( mate ) && IsAlive( mate ) )
+		van thread anim_loop_solo( mate, "end_get_in_idle", "stop_loop", "origin_animate_jnt" );
 }
 
 // Makarov turns to the other player and shoots him (his shooting animation of the far ending);

@@ -242,6 +242,9 @@ main()
 		case "tour":
 			tour();
 			break;
+		case "cptour":
+			cptour();
+			break;
 		case "rappel":
 			rappel();
 			break;
@@ -2453,6 +2456,78 @@ tour()
 	report( "done" );
 }
 
+// cptour: (any map, default start) for every start point of the level: the section starts, the mission is
+// failed after a few seconds, and the level must start again at the same section with both players up
+// and together; then the next section. The restart from a checkpoint (the section the level reached)
+// is this same path.
+cptour()
+{
+	starts = tour_starts();
+	at = -1;	// the default start comes before the first named one
+	foreach ( n, name in starts )
+		if ( name == level.start_point )
+			at = n;
+	here = level.start_point;
+	phase = GetDvar( "mw2coop_qa_phase" );
+	// the section the mission was failed in: the level may restart at its own checkpoint for it (Favela's
+	// "torture" restarts at "favela"), which is the next section to count from, not a new section to fail in
+	was = here;
+	if ( GetSubStr( phase, 0, 4 ) == "cpt:" && IsSubStr( phase, ":failed" ) )
+	{
+		parts = StrTok( phase, ":" );
+		if ( parts.size == 3 )
+			was = parts[ 1 ];
+	}
+	if ( phase == "cpt:" + was + ":failed" )
+	{
+		foreach ( n, name in starts )
+			if ( name == was )
+				at = n;
+		extra = "";
+		if ( was != here )
+			extra = ", the level's checkpoint for " + was;
+		report( "cptour " + level.script + ": restarted at " + here + extra + " (" + ( at + 2 ) + " of " + ( starts.size + 1 ) + ")" );
+		SetDvar( "mw2coop_qa_phase", "cpt:" + was + ":ok" );
+		if ( flag_exist( "mw2coop_regrouped" ) )
+			for ( t = 0; t < 10 && !flag( "mw2coop_regrouped" ); t += 0.5 )
+				wait 0.5;
+		wait 3;
+		check( level.players.size == 2 && isdefined( level.player2 ), "two players after the restart (" + level.players.size + ")" );
+		if ( was == here )
+			check( GetDvar( "start" ) == here || ( here == "default" && ( GetDvar( "start" ) == "" || GetDvar( "start" ) == "default" ) ) || IsSubStr( GetDvar( "start" ), " ** " ), "the start point is still " + here + " ('" + GetDvar( "start" ) + "')" );
+		tour_state( "after the restart" );
+		qa_shot( "c-restart" );
+	}
+	else if ( phase == "cpt:" + here + ":ok" )
+		report( "the mission failed again in section " + here + " (the level's own fail): skipped" );
+	else
+	{
+		report( "cptour " + level.script + ": section " + here + " (" + ( at + 2 ) + " of " + ( starts.size + 1 ) + ")" );
+		if ( flag_exist( "mw2coop_regrouped" ) )
+			for ( t = 0; t < 10 && !flag( "mw2coop_regrouped" ); t += 0.5 )
+				wait 0.5;
+		if ( level.start_point == "default" )
+			wait_intro();
+		wait 3;
+		check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+		SetDvar( "mw2coop_qa_phase", "cpt:" + here + ":failed" );
+		report( "failing the mission at " + here );
+		level thread maps\_mw2coop::mission_failed();
+		wait 40;
+		report( "FAIL no restart 40 s after the failure at " + here );
+		return;
+	}
+	if ( at + 1 < starts.size )
+	{
+		SetDvar( "start", starts[ at + 1 ] );
+		report( "next section " + starts[ at + 1 ] );
+		maps\_mw2coop::request( "restart" );
+		return;
+	}
+	SetDvar( "mw2coop_qa_phase", "done" );
+	report( "done" );
+}
+
 // the level's playable start points in order (debug and tweak starts left out, each name once)
 tour_starts()
 {
@@ -2517,6 +2592,12 @@ tour_state( where )
 			text += " linked";
 	}
 	apart = int( Distance( level.player.origin, level.player2.origin ) );
+	// the Museum's black screens (level.black for everyone, the extra ones for the other players)
+	if ( isdefined( level.black ) )
+		text += " [black " + level.black.alpha + "]";
+	if ( isdefined( level.mw2coop_museum_black ) )
+		foreach ( overlay in level.mw2coop_museum_black )
+			text += " [p2 black " + overlay.alpha + "]";
 	report( text + "; " + apart + " apart" );
 	check( IsAlive( level.player ) && IsAlive( level.player2 ) && !maps\_mw2coop::is_downed( level.player ) && !maps\_mw2coop::is_downed( level.player2 ), "both up " + where );
 	// both riding something (separate vehicles, separate rigs) may be far apart; one riding and

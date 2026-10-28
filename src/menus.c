@@ -177,6 +177,15 @@ void menus_log_items(const char *menu_name)
 		float *r = (float *)(it + ITEM_RECT);
 		log_printf("menus: %s[%d] %s '%s' x %g y %g w %g h %g align %d/%d", menu_name, i, name ? name : "-",
 			   text ? text : "", r[0], r[1], r[2], r[3], it[ITEM_RECT_ALIGN_H], it[ITEM_RECT_ALIGN_V]);
+		// what can lock or hide it, and what it runs (the campaign's mission buttons)
+		MenuEventHandlerSet *act = *(MenuEventHandlerSet **)(it + ITEM_ACTION);
+		const char *script = act && act->count > 0 && act->handlers[0] && act->handlers[0]->type == 0
+					     ? (const char *)act->handlers[0]->data
+					     : NULL;
+		void *fexp = *(void **)(it + ITEM_FLOAT_EXPS);
+		if (fexp || *(void **)(it + ITEM_DISABLED_EXP) || script)
+			log_printf("menus:   floatExps %p disabledExp %p flags %x action %.200s", fexp,
+				   *(void **)(it + ITEM_DISABLED_EXP), *(uint32_t *)(it + ITEM_DYNAMIC_FLAGS), script ? script : "-");
 	}
 }
 
@@ -707,6 +716,15 @@ static void picking_tick(void)
 		log_printf("menus: mission pick for the lobby cancelled");
 	}
 }
+
+// Unlock all missions for the co-op host's pick (issue #3): the game's mission list gates on the dvar mis_cheat
+// (the cheat that opens every mission; the profile is untouched). It is 1 only while one of the list's menus is
+// open in a co-op pick or lobby, and put back as it was afterwards, so the player's own Mission Select and saves
+// keep their rules.
+static int cheat_on;
+static char cheat_old[16];
+
+static void unlock_missions_tick(void);
 
 // ---------------------------------------------------------------- the lobby with a campaign mission
 
@@ -1351,6 +1369,57 @@ static void online_f(void)
 // missions from the difficulty popup); it sets the lobby's mission instead of starting solo.
 static void (*devmap_native)(void);
 
+// The list shows "cheats enabled" while mis_cheat is 1: the item's text is an empty string during the co-op pick.
+static void hide_cheat_text(int hide)
+{
+	static const char *const menus[] = {"levels", "popmenu_act1", "popmenu_act2", "popmenu_act3"};
+	static const char *saved[4];
+	static const char empty[] = "";
+	for (size_t i = 0; i < sizeof(menus) / sizeof(menus[0]); i++) {
+		uint8_t *m = ui_find_menu(menus[i]);
+		int at = m ? ui_item_index(m, "cheat_indicator") : -1;
+		if (at < 0)
+			continue;
+		const char **text = (const char **)((*(uint8_t ***)(m + MENU_ITEMS))[at] + ITEM_TEXT);
+		if (hide && *text != empty) {
+			saved[i] = *text;
+			*text = empty;
+		} else if (!hide && *text == empty) {
+			*text = saved[i];
+		}
+	}
+}
+
+static void unlock_missions_tick(void)
+{
+	int want = 0;
+	if (picking || campaign_lobby()) {
+		static const char *const menus[] = {"levels", "popmenu_act1", "popmenu_act2", "popmenu_act3"};
+		for (size_t i = 0; i < sizeof(menus) / sizeof(menus[0]); i++) {
+			uint8_t *m = ui_find_menu(menus[i]);
+			if (m && (*(uint32_t *)(m + ITEM_DYNAMIC_FLAGS) & WINDOW_VISIBLE))
+				want = 1;
+		}
+	}
+	if (cheat_on)
+		hide_cheat_text(want);
+	if (want && !cheat_on) {
+		char buf[32];
+		game_dvar_string("mis_cheat", buf, sizeof(buf));
+		snprintf(cheat_old, sizeof(cheat_old), "%s",
+			 (strcmp(buf, "<missing>") == 0 || strcmp(buf, "false") == 0) ? "0" : (strcmp(buf, "true") == 0 ? "1" : buf));
+		game_cbuf_addtext("set mis_cheat 1\n");
+		cheat_on = 1;
+		log_printf("menus: mission list open for the lobby: mis_cheat 1 (was %s), all missions selectable", cheat_old);
+	} else if (!want && cheat_on) {
+		char cmd[48];
+		snprintf(cmd, sizeof(cmd), "set mis_cheat %s\n", cheat_old);
+		game_cbuf_addtext(cmd);
+		cheat_on = 0;
+		log_printf("menus: mission list closed: mis_cheat back to %s", cheat_old);
+	}
+}
+
 static void devmap_f(void)
 {
 	char map[64];
@@ -1435,6 +1504,7 @@ static void tick_f(void)
 	add_saves_menu();
 	add_partner_popups();
 	picking_tick();
+	unlock_missions_tick();
 	find_tick();
 	int campaign = campaign_lobby();
 	patch_lobby(campaign);

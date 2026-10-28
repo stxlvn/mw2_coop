@@ -95,7 +95,7 @@ channel, script requests, `mw2coop_bind` as `+button <key>` console commands, `s
 map), `settings`, `upnp`, `crash`, `fov`. `shot` is stubbed: the 32-bit exe has no call of a D3D9 device method that a byte search finds (no `call [reg+0xA8]`), a throwaway NULLREF device gets the Steam overlay's copy of the vtable, and every d3d9 object in the exe's data passes a "119 methods" test (vtables lie next to each other), so the game's device is not located yet (idea: hook `Direct3DCreate9` before the game creates its device, or read the pointer from a known frame function). Not yet: `net`, `steamnet`, `firewall`, `access`, `progress`, `mirror`, `menus`, `localize`,
 `scrdebug`, `memdump`, `transplant`, `shot`. A 32-bit `cmd_function_t` node is 0x18 bytes (`flag` last);
 a 20-byte node let `Cmd_AddCommand` overwrite a neighbouring static (it zeroed the settings port).
-`net_port` cannot be patched in DllMain in 32 bits (the code is still wrapped then): the port setting does not apply yet.
+The `net_port` default is patched in DllMain in 32 bits too (checked 2026-10-28: settings.ini port 28990 gives "net_port default 28990").
 
 ## Steps
 

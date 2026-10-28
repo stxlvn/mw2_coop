@@ -27,3 +27,90 @@ museum_mode()
 	}
 	return mode;
 }
+
+// ---------------------------------------------------------------------------------------------
+// The museum's credits (char_museum.gsc as patched): the camera flies through the exhibits and the
+// player rides it. Both players ride it, from the same black screen.
+
+museum_link( camera )
+{
+	foreach ( player in level.players )
+	{
+		player PlayerLinkTo( camera, undefined, 1, 0, 0, 0, 0, 0 );
+		// both ride the same camera point: each would look from inside the other's head and body
+		// (the dark masses over the whole screen in the QA frames)
+		if ( coop() )
+			player Hide();
+	}
+}
+
+// char_museum_code::camera_move(): the blend onto the camera that has moved to the next exhibit
+museum_link_blend( time, accel, decel )
+{
+	foreach ( player in level.players )
+	{
+		if ( isdefined( accel ) )
+			player PlayerLinkToBlend( level.camera, undefined, time, accel, decel );
+		else
+			player PlayerLinkToBlend( level.camera, undefined, time );
+	}
+}
+
+// the black screen of the start (level.black is player 1's): the same for the others
+museum_black()
+{
+	level.mw2coop_museum_black = [];
+	if ( !coop() )
+		return;
+	foreach ( player in level.players )
+		if ( player != level.player )
+			level.mw2coop_museum_black[ level.mw2coop_museum_black.size ] = maps\_hud_util::create_client_overlay( "black", 1, player );
+}
+
+museum_black_fade( alpha, time )
+{
+	if ( !isdefined( level.mw2coop_museum_black ) )
+		return;
+	foreach ( overlay in level.mw2coop_museum_black )
+	{
+		overlay FadeOverTime( time );
+		overlay.alpha = alpha;
+	}
+}
+
+// char_museum_code::civ_talkers(): the civilian loops its idle. The entries of the museum's own animation script are
+// single animations; anim_weight() needs an array of looping animations, so the entry is made one first.
+civ_loop( node, civ )
+{
+	name = node.animation;
+	// credits_1 (from the knife fight): the museum's animation tables are incomplete when the civilians
+	// come (26 entries of "generic", none of civilian_stand_loops()); define them once more
+	if ( isdefined( name ) && !isdefined( level.scr_anim[ "generic" ][ name ] ) && !isdefined( level.mw2coop_museum_anim_again ) )
+	{
+		level.mw2coop_museum_anim_again = true;
+		maps\_mw2coop::state( "museum: animation table has " + level.scr_anim[ "generic" ].size + " entries, running char_museum_anim::main again" );
+		maps\char_museum_anim::main();
+		maps\_mw2coop::state( "museum: now " + level.scr_anim[ "generic" ].size + " entries" );
+	}
+	if ( !isdefined( name ) || !isdefined( level.scr_anim[ "generic" ][ name ] ) )
+	{
+		if ( !isdefined( level.mw2coop_museum_civ_logged ) )
+			level.mw2coop_museum_civ_logged = 0;
+		if ( level.mw2coop_museum_civ_logged < 8 )
+		{
+			level.mw2coop_museum_civ_logged++;
+			generic = level.scr_anim[ "generic" ];
+			maps\_mw2coop::state( "museum: a civilian has no animation entry for '" + name + "' (generic has " + generic.size + " entries; stand_idle " + isdefined( generic[ "civilian_stand_idle" ] ) + " smoking_A " + isdefined( generic[ "civilian_smoking_A" ] ) + " directions_1_A " + isdefined( generic[ "civilian_directions_1_A" ] ) + " laptop_stand_idle " + isdefined( generic[ "laptop_stand_idle" ] ) + " sitting_talking_A_1 " + isdefined( generic[ "civilian_sitting_talking_A_1" ] ) + ")" );
+		}
+		return;
+	}
+	if ( !IsArray( level.scr_anim[ "generic" ][ name ] ) )
+	{
+		single = level.scr_anim[ "generic" ][ name ];
+		level.scr_anim[ "generic" ][ name ] = [];
+		level.scr_anim[ "generic" ][ name ][ 0 ] = single;
+		maps\_mw2coop::state( "museum: the idle '" + name + "' made an array of looping animations" );
+	}
+	node maps\_anim::anim_generic_loop( civ, name );
+}
+
