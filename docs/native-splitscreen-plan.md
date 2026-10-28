@@ -357,6 +357,10 @@ screenshots on one PC (`MW2COOP_LOBBY=1 sh tools/qa_native.sh 150`), not played 
    2026-10-28, owner on trainer: in the bottom half the FAR models (NPCs, vehicles, distant scenery) jump to the right and back, near ones are fine; with `set r_forceLod high` the jumps
    are gone, so it is the level-of-detail choice (probably state shared by both views, the other context's camera picks another LOD). r_forceLod (dvar at rva 0x4116460) is read in
    rva 0xdd90, the place to start. PARKED by the owner until players report it.
+4a. DONE 2026-10-28 (owner's choice "variant 2"): the split comes 0.25 s into the level, under the title's black screen (`split_view_gate`; the slam zoom levels keep one picture
+   until it has landed). The title lines (maps\_introscreen patch: sort 1.0078125) are drawn by context 0 alone with the full-screen 2D placement (`hudelem_hook`, rva 0xa3b80) and the
+   rows of its layer below its half are laid over the bottom half (`overlay_titles`): one copy, single-player size and place. The layer comparison (`dedupe`) is off by default: it cut
+   holes in the black screen both halves hold the same, and the texts it was for are drawn by one context each now. Checked on trainer frames (lines, dissolve, fade).
 5. The second player joins too late: he must appear right after the loading and the black title screen (the context 1 starts ~5 frames after the first cgame draw, but the split switches on after the intro, and in
    Contingency the first minute shows one picture: check what is slow).
 6. Weapon switch for the second player by pad: no bindable "weapnext" found; a script `SwitchToWeapon` is overridden by his usercmd.

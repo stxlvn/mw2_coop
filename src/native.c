@@ -284,6 +284,61 @@ static void dedupe_make(IDirect3DDevice9 *dev)
 	}
 }
 
+// The mission's title lines are drawn by context 0 with the full-screen 2D placement (hudelem_hook): the rows of its layer below its half hold them, and they are laid over the bottom
+// half texture (once per frame of the bottom half, after its own 2D), so the lines come where and as big as they are in single player.
+static volatile DWORD title_tick; // when a title line was last drawn
+static void overlay_titles(IDirect3DDevice9 *dev)
+{
+	IDirect3DSurface9 *old_rt = NULL, *old_ds = NULL;
+	if (!comp_sb && FAILED(IDirect3DDevice9_CreateStateBlock(dev, D3DSBT_ALL, &comp_sb)))
+		return;
+	IDirect3DStateBlock9_Capture(comp_sb);
+	IDirect3DDevice9_GetRenderTarget(dev, 0, &old_rt);
+	IDirect3DDevice9_GetDepthStencilSurface(dev, &old_ds);
+	IDirect3DDevice9_SetRenderTarget(dev, 0, comp_surf[1]);
+	IDirect3DDevice9_SetDepthStencilSurface(dev, NULL);
+	D3DVIEWPORT9 vp = {0, 0, comp_w, comp_h / 2, 0.0f, 1.0f};
+	IDirect3DDevice9_SetViewport(dev, &vp);
+	if (SUCCEEDED(IDirect3DDevice9_BeginScene(dev))) {
+		static const struct {
+			D3DRENDERSTATETYPE s;
+			DWORD v;
+		} rs[] = {{D3DRS_ZENABLE, 0}, {D3DRS_ZWRITEENABLE, 0}, {D3DRS_CULLMODE, D3DCULL_NONE}, {D3DRS_ALPHATESTENABLE, 0}, {D3DRS_ALPHABLENDENABLE, 1},
+			  {D3DRS_SRCBLEND, D3DBLEND_ONE}, {D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA}, {D3DRS_SEPARATEALPHABLENDENABLE, 0}, {D3DRS_BLENDOP, D3DBLENDOP_ADD},
+			  {D3DRS_STENCILENABLE, 0}, {D3DRS_SCISSORTESTENABLE, 0}, {D3DRS_COLORWRITEENABLE, 0xf}, {D3DRS_FOGENABLE, 0}, {D3DRS_LIGHTING, 0}, {D3DRS_SRGBWRITEENABLE, 0}};
+		for (size_t i = 0; i < sizeof(rs) / sizeof(rs[0]); i++)
+			IDirect3DDevice9_SetRenderState(dev, rs[i].s, rs[i].v);
+		IDirect3DDevice9_SetVertexShader(dev, NULL);
+		IDirect3DDevice9_SetPixelShader(dev, NULL);
+		IDirect3DDevice9_SetFVF(dev, D3DFVF_XYZRHW | D3DFVF_TEX1);
+		IDirect3DDevice9_SetTexture(dev, 0, (IDirect3DBaseTexture9 *)lay_tex[0]);
+		IDirect3DDevice9_SetTexture(dev, 1, NULL);
+		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+		IDirect3DDevice9_SetTextureStageState(dev, 0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+		IDirect3DDevice9_SetTextureStageState(dev, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+		IDirect3DDevice9_SetTextureStageState(dev, 1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_SRGBTEXTURE, 0);
+		float w = (float)comp_w - 0.5f, h = (float)(comp_h / 2) - 0.5f;
+		float q[4][6] = {{-0.5f, -0.5f, 0, 1, 0, 0.5f}, {w, -0.5f, 0, 1, 1, 0.5f}, {-0.5f, h, 0, 1, 0, 1.0f}, {w, h, 0, 1, 1, 1.0f}}; // the bottom half of the layer
+		IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, sizeof(q[0]));
+		IDirect3DDevice9_EndScene(dev);
+	}
+	IDirect3DDevice9_SetDepthStencilSurface(dev, old_ds);
+	IDirect3DDevice9_SetRenderTarget(dev, 0, old_rt);
+	IDirect3DStateBlock9_Apply(comp_sb);
+	if (old_rt)
+		IDirect3DSurface9_Release(old_rt);
+	if (old_ds)
+		IDirect3DSurface9_Release(old_ds);
+}
+
 // Lays the top half of a 2D layer (premultiplied alpha, see layer_fix) over the half texture with the fixed pipeline. Everything the game had set on the device is kept in a state block
 // and put back, so the engine's own state caching is not fooled.
 static int layer_full;
@@ -328,7 +383,7 @@ static void overlay_layer(IDirect3DDevice9 *dev, int half)
 		float q[4][6] = {{-0.5f, -0.5f, 0, 1, 0, 0}, {w, -0.5f, 0, 1, 1, 0}, {-0.5f, h, 0, 1, 0, layer_full ? 1.0f : 0.5f}, {w, h, 0, 1, 1, layer_full ? 1.0f : 0.5f}}; // the top half of the layer (layerdebug=3: all of it)
 		static int dedupe = -1;
 		if (dedupe < 0)
-			dedupe = cfg("dedupe", 1);
+			dedupe = cfg("dedupe", 0); // off: the global texts are drawn by one context each now (msgwin_hook, hudelem_hook), and the comparison cut holes in what both halves hold the same (the intro's black screen)
 		DWORD now = GetTickCount();
 		int scoped = 0; // (a scope's black overlay is opaque behind the texts: what is cut out of such a layer is filled with black, not left transparent)
 		int one_scoped = now - scope_tick[0] < 400 || now - scope_tick[1] < 400; // somebody looks through a scope: the intro's title lines cannot be on screen, no forced cut-out
@@ -348,7 +403,7 @@ static void overlay_layer(IDirect3DDevice9 *dev, int half)
 			memcpy(bands[2], half == 0 ? lower : none, sizeof(bands[2]));
 			IDirect3DDevice9_SetPixelShader(dev, dedupe_ps);
 			IDirect3DDevice9_SetPixelShaderConstantF(dev, 0, &bands[0][0], 3);
-			float force[4] = {GetTickCount() - split_tick < 14000 && !one_scoped ? 1.0f : 0.0f, 0, 0, 0};
+			float force[4] = {GetTickCount() - split_tick < 14000 && !one_scoped && !title_tick ? 1.0f : 0.0f, 0, 0, 0}; // (not once the title lines go over the whole picture)
 			IDirect3DDevice9_SetPixelShaderConstantF(dev, 3, force, 1);
 			float fill[4] = {now - scope_tick[half] < 400 ? 1.0f : 0.0f, 0, 0, 0};
 			IDirect3DDevice9_SetPixelShaderConstantF(dev, 4, fill, 1);
@@ -427,6 +482,8 @@ static void compose(IDirect3DDevice9 *dev, int half)
 			}
 			if (lay_have[half] && comp_have[half] && dbg != 1)
 				overlay_layer(dev, half);
+			if (half == 1 && comp_have[1] && lay_have[0] && GetTickCount() - title_tick < 500 && dbg != 1)
+				overlay_titles(dev);
 		}
 		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
 		RECT bottom = {0, (LONG)(d.Height / 2), (LONG)d.Width, (LONG)d.Height};
@@ -2534,6 +2591,28 @@ static void name_self_install(void)
 	jhook_jump(site, sizeof(name_self_bytes), stub, 0x90);
 }
 
+// The mission's title lines (maps\_introscreen patch: sort 1.0078125 instead of 1) are drawn once, over the whole picture and as big as in single player: the HUD element draw
+// (rva 0xa3b80: local client, element; the sort at +0x88) leaves them out in context 1 and draws them in context 0 with the full-screen 2D placement, into the rows of its layer
+// below its half, which overlay_titles lays over the bottom half. So the split can come while the title is still on screen without cutting it in two ([native] titles=0 off).
+static const uint8_t hudelem_bytes[] = {0x40, 0x55, 0x53, 0x56, 0x57, 0x48, 0x8d, 0xac, 0x24, 0x68, 0xfc, 0xff, 0xff, 0x48, 0x81, 0xec, 0x98, 0x04, 0x00, 0x00};
+static void (*hudelem_original)(int, void *);
+static void hudelem_hook(int lc, void *e)
+{
+	if (mode == 10 && native_active && split_on && *(const float *)((const uint8_t *)e + 0x88) == 1.0078125f) {
+		if (ctx_current == 1)
+			return;
+		int pushed = place_pushed;
+		if (pushed)
+			place_pop();
+		hudelem_original(lc, e);
+		if (pushed)
+			place_push();
+		title_tick = GetTickCount();
+		return;
+	}
+	hudelem_original(lc, e);
+}
+
 // The name the loop shows comes from rva 0xd3110, which outside the engine's co-op gives the profile's name for every client: player 2 got player 1's name. The call at 0x93e2f
 // gets player 2's from [native] p2name, by default the profile's name with " (2)" after it, the way the console names a second player on one profile.
 static const char *(*name_get_original)(int);
@@ -2938,6 +3017,8 @@ static void contexts_install(void)
 			log_printf("native: local slot function bytes differ");
 		if (!jhook_function(base + 0xcb4f0, msgwin_bytes, sizeof(msgwin_bytes), msgwin_hook, (void **)&msgwin_original))
 			log_printf("native: game message window draw bytes differ");
+		if (cfg("titles", 1) && !jhook_function(base + 0xa3b80, hudelem_bytes, sizeof(hudelem_bytes), hudelem_hook, (void **)&hudelem_original))
+			log_printf("native: HUD element draw bytes differ");
 		if (cfg("namefix", 1)) {
 			name_self_install();
 			if (!jhook_call(base + 0x93e2f, name_get_hook, (void **)&name_get_original))
