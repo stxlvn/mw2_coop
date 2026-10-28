@@ -348,8 +348,7 @@ screenshots on one PC (`MW2COOP_LOBBY=1 sh tools/qa_native.sh 150`), not played 
 2. The dark backing was the compass's mask: it writes a rectangle into the alpha alone (blending off, colour write 8), multiplies it by its round edge (ZERO/SRCALPHA, colour write 8),
    then draws its map by destination alpha (DESTALPHA/INVDESTALPHA). `layer_fix` forced "keep the alpha" on the multiply, so the map covered the whole rectangle: a dark square
    around the compass, seen on snow. Alpha-only draws now keep the game's own blending (fixed 2026-10-28, checked on trainer frames while walking).
-   Still open: in the scope the compass and the ammo counter must be hidden behind the scope's black overlay (they show over it when moving or firing). Check the draw order in the layer
-   (the scene's 2D pass 0x63680 and the final list 0x5c010 are drawn into the same layer in that order) and the original game's behaviour (plain game: `MW2COOP_PLAIN=1`, aim, walk, `!shot`).
+   The compass and the ammo counter over the scope's black overlay are not a bug (owner, 2026-10-28): they stay as they are.
 3a. DONE 2026-10-28: names over the partner in both halves. rva 0x93ac0 draws them for clients 0 and 1 and skips "self" (CMP EBP,EAX at 0x93db3); context 1 skipped player 1.
    A stub at 0x93daa (`name_self_install`) skips player 2 in context 1; client 1 is never tested as local there (the local player count it reads is 1), so `name_get_hook` (the call at
    0x93e2f) gives it an empty name in context 1. Player 2's name: [native] p2name, else the profile's name + " (2)" (rva 0xd3110 gives the profile's name for every client).
