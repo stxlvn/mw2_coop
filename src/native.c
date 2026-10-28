@@ -627,6 +627,21 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 		InterlockedIncrement(&ring_tail);
 	}
 	LONG pops = InterlockedIncrement(&pops_total);
+	{ // [native] hitchlog=1: a gap of more than 150 ms between two composed frames is logged (the stalls during the title's fade)
+		static int on = -1;
+		static LARGE_INTEGER freq, last;
+		static unsigned logged;
+		if (on < 0)
+			on = cfg("hitchlog", 0), QueryPerformanceFrequency(&freq);
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		if (on && last.QuadPart && logged < 100) {
+			double ms = (double)(now.QuadPart - last.QuadPart) * 1000.0 / (double)freq.QuadPart;
+			if (ms > 150.0)
+				logged++, log_printf("native: hitch %.0f ms before composed frame %ld (half %d)", ms, (long)pops, half);
+		}
+		last = now;
+	}
 	compose(dev, half);
 	skip_rotation(dev);
 	static LONG seq_at = -1;
