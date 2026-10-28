@@ -1309,11 +1309,95 @@ static void scan_place(void)
 	log_printf("native: scanplace done, %d hits", hits);
 }
 
+static int ctx_current; // defined with the context ranges below
+static unsigned p0cnt_draws, p0cnt_adds, p0cnt_flags1, p0cnt_flags0; // flags (4th argument) of the last add of entity 0 in context 1 / of entity 1 in context 0
+static uint8_t p0dump_slot[2][0x1a8], p0dump_dobj[2][0x200]; // [native] p0cnt=2: the entity slot and the DObj bytes of the other player as each context draws him (0: context 0's entity 1, 1: context 1's entity 0)
+static int p0dump_have[2];
+static void *p0ptr[6];
+static unsigned p0ptr_cnt[6], p0ptr_b8[6], p0ptr_bc[6]; // the distinct DObjs added as entity 0 in context 1 since the last p0cnt line, how often, and their dwords +0xb8 / +0xbc
+static void p0dump_diff(const char *what, const uint8_t *a, const uint8_t *b, int n)
+{
+	char buf[1200];
+	int len = 0, cnt = 0;
+	for (int i = 0; i + 4 <= n && len < (int)sizeof(buf) - 40; i += 4) {
+		uint32_t x = *(const uint32_t *)(a + i), y = *(const uint32_t *)(b + i);
+		if (x != y && ++cnt <= 60)
+			len += snprintf(buf + len, sizeof(buf) - len, " %x:%x/%x", i, x, y);
+	}
+	buf[len] = 0;
+	log_printf("native: p0dump %s %d dwords differ:%s", what, cnt, buf);
+}
+static float p0cnt_draw_org[3], p0cnt_draw_org_b[3]; // the two origins the last two adds of entity 0 were given (5th argument and the pose at rdx) // [native] p0cnt=1: context 1's draws, and the adds of entity 0's DObj to its scene, per second
 static void cg_draw_hook(unsigned local_client, int a, int b)
 {
 	float *sw = subwindow();
 	if (split_on)
 		scan_place();
+	// Time measurement ([native] timelog=1, 2026-10-28: the owner sees entities and players "as on ice" in the split): per cgame draw, the wall clock and the live context's
+	// client times: cg.time (rva 0x422434), cg.frametime (0x422430), cg.frameInterpolation (0x42242c), cl.serverTime (0x51dca8) and the snapshot lerp fraction (0x51dcb0).
+	if (CFG_ONCE("p0cnt", 0) && ctx_on && ctx_current == 1) {
+		if (++p0cnt_draws >= 100) {
+			const float *e = (const float *)(base + 0x441070);
+			log_printf("native: p0cnt ctx1 draws %u adds of entity 0 %u | slot0 pos %.1f %.1f %.1f | cg.ps (p2) %.1f %.1f | last add: arg5 %.1f %.1f %.1f pose %.1f %.1f %.1f | flags ctx1 ent0 %08x ctx0 ent1 %08x", p0cnt_draws, p0cnt_adds, (double)e[63], (double)e[64], (double)e[65],
+				   (double)*(const float *)(base + 0x42245c), (double)*(const float *)(base + 0x422460), (double)p0cnt_draw_org[0], (double)p0cnt_draw_org[1], (double)p0cnt_draw_org[2],
+				   (double)p0cnt_draw_org_b[0], (double)p0cnt_draw_org_b[1], (double)p0cnt_draw_org_b[2], p0cnt_flags1, p0cnt_flags0);
+			p0cnt_draws = p0cnt_adds = 0;
+			{
+				char b[300];
+				int n = 0;
+				for (int k = 0; k < 6 && p0ptr[k]; k++)
+					n += snprintf(b + n, sizeof(b) - n, " [%p x%u b8 %x bc %x]", p0ptr[k], p0ptr_cnt[k], p0ptr_b8[k], p0ptr_bc[k]);
+				b[n] = 0;
+				log_printf("native: p0dobjs%s", b);
+				memset(p0ptr, 0, sizeof(p0ptr));
+				memset(p0ptr_cnt, 0, sizeof(p0ptr_cnt));
+			}
+			if (CFG_ONCE("p0cnt", 0) >= 2 && p0dump_have[0] && p0dump_have[1]) {
+				static uint8_t prev_slot[0x1a8], prev_dobj[0x200];
+				p0dump_diff("slot ctx1ent0/ctx0ent1", p0dump_slot[1], p0dump_slot[0], sizeof(p0dump_slot[0]));
+				p0dump_diff("dobj ctx1ent0/ctx0ent1", p0dump_dobj[1], p0dump_dobj[0], sizeof(p0dump_dobj[0]));
+				p0dump_diff("slot ctx1 since last", p0dump_slot[1], prev_slot, sizeof(prev_slot));
+				p0dump_diff("dobj ctx1 since last", p0dump_dobj[1], prev_dobj, sizeof(prev_dobj));
+				memcpy(prev_slot, p0dump_slot[1], sizeof(prev_slot));
+				memcpy(prev_dobj, p0dump_dobj[1], sizeof(prev_dobj));
+			}
+		}
+	}
+	// View angle check ([native] viewlog=1, 2026-10-28: a script's SetPlayerAngles turns player 2's body but not his camera): per context, every 25th draw, the live context's
+	// playerState view angles (cg.ps rva 0x422440: pitch +0x108, yaw +0x10c, roll +0x110) and dwords +0x100..+0x120 (delta_angles are among them), the view angle accumulators
+	// (rva 0x533d14 pitch, 0x533d18 yaw) and the cl block's playerState copy (rva 0x535d38) yaw
+	if (CFG_ONCE("viewlog", 0) && ctx_on) {
+		static unsigned vn;
+		if (++vn % 25 == 0 && vn < 20000) {
+			const uint8_t *ps = base + 0x422440;
+			const unsigned *d = (const unsigned *)(ps + 0x100);
+			log_printf("native: viewlog ctx %d cg.ps pitch %.1f yaw %.1f roll %.1f | acc pitch %.1f yaw %.1f | cl.ps yaw %.1f | ps+100: %08x %08x %08x %08x %08x %08x %08x %08x", ctx_current,
+				   (double)*(float *)(ps + 0x108), (double)*(float *)(ps + 0x10c), (double)*(float *)(ps + 0x110), (double)*(float *)(base + 0x533d14), (double)*(float *)(base + 0x533d18),
+				   (double)*(float *)(base + 0x535d38 + 0x10c), d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+		}
+	}
+	if (CFG_ONCE("timelog", 0) && ctx_on) {
+		static unsigned seq;
+		unsigned skip = (unsigned)CFG_ONCE("timelogskip", 0);
+		if (seq >= skip && seq < skip + 6000) {
+			LARGE_INTEGER pc, hz;
+			QueryPerformanceCounter(&pc);
+			QueryPerformanceFrequency(&hz);
+			log_printf("native: timelog #%u wall %.1f ctx %d cg.time %d frametime %d interp %.3f cl.serverTime %d frac %.3f", seq, (double)pc.QuadPart * 1000.0 / (double)hz.QuadPart,
+				   ctx_current, *(int *)(base + 0x422434), *(int *)(base + 0x422430), (double)*(float *)(base + 0x42242c), *(int *)(base + 0x51dca8), (double)*(float *)(base + 0x51dcb0));
+			if (CFG_ONCE("timelog", 0) > 1) {
+				// "as on ice": where player 2 is by his own context's playerState (cg.ps origin, rva 0x42245c, live in context 1) and where context 0's cgame has his entity (slot 1,
+				// interpolated origin floats 63..65); both on the same cg.time scale
+				const float *ps = (const float *)(base + 0x42245c);
+				const float *e1 = (const float *)(base + 0x441070 + 0x1a8);
+				if (ctx_current == 1)
+					log_printf("native: timelog p2ps cg.time %d pos %.1f %.1f %.1f", *(int *)(base + 0x422434), (double)ps[0], (double)ps[1], (double)ps[2]);
+				else
+					log_printf("native: timelog p2ent cg.time %d pos %.1f %.1f %.1f", *(int *)(base + 0x422434), (double)e1[63], (double)e1[64], (double)e1[65]);
+			}
+		}
+		seq++;
+	}
 	if (!mode || !sw || second_pass || (mode >= 5 && !split_on)) {
 		if ((mode == 8 || mode == 10) && cg_aspect_have) { // back from the split: the cgame's aspect as it was
 			*(float *)(base + 0x43c640) = cg_aspect_saved;
@@ -3185,6 +3269,36 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 	static int on = -1;
 	if (on < 0)
 		on = cfg("dobjlog", 0);
+	if (ctx_current == 0 && (c & 0xffff) == 1)
+		p0cnt_flags0 = d;
+	if (CFG_ONCE("p0cnt", 0) >= 2 && ((ctx_current == 0 && (c & 0xffff) == 1) || (ctx_current == 1 && (c & 0xffff) == 0))) {
+		int k = ctx_current;
+		memcpy(p0dump_slot[k], base + 0x441070 + (size_t)(c & 0xffff) * 0x1a8, sizeof(p0dump_slot[k]));
+		if (a && !IsBadReadPtr(a, sizeof(p0dump_dobj[k]))) {
+			memcpy(p0dump_dobj[k], a, sizeof(p0dump_dobj[k]));
+			p0dump_have[k] = 1;
+		}
+	}
+	if (ctx_current == 1 && (c & 0xffff) == 0) {
+		p0cnt_adds++;
+		p0cnt_flags1 = d;
+		if (CFG_ONCE("p0cnt", 0) && a && !IsBadReadPtr(a, 0x100)) {
+			int k = 0;
+			while (k < 6 && p0ptr[k] && p0ptr[k] != a)
+				k++;
+			if (k < 6) {
+				p0ptr[k] = a;
+				p0ptr_cnt[k]++;
+				p0ptr_b8[k] = *(const uint32_t *)((const uint8_t *)a + 0xb8);
+				p0ptr_bc[k] = *(const uint32_t *)((const uint8_t *)a + 0xbc);
+			}
+		}
+		const float *dp = (const float *)e, *pp = (const float *)b;
+		for (int i = 0; i < 3; i++) {
+			p0cnt_draw_org[i] = dp ? dp[i] : 0;
+			p0cnt_draw_org_b[i] = pp ? pp[6 + i] : 0; // the pose's origin sits at +0x18 of what rdx points to (see jumplog)
+		}
+	}
 	if (on && ctx_current == 1) {
 		static unsigned seen, frame;
 		if (c == 0 || ++seen % 1 == 0) {
@@ -3236,6 +3350,18 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 				other[k]++;
 			if (++calls % 300 == 0)
 				log_printf("native: dobjcount ctx1: ent0 at p1 %u at p2 %u other %u | ent1 at p1 %u at p2 %u other %u", at_p0[0], at_p2[0], other[0], at_p0[1], at_p2[1], other[1]);
+		}
+	}
+	{ // Player 1's body in context 1 is added twice: by the cgame's add-by-type function (rva 0x9ea20, its "general" branch: context 1's slot 0 holds a copy of context 0's
+	  // own player) and by the pass that draws the other co-op player (rva 0xb0680, as context 0 draws player 2). With both in the scene the body was not drawn in the
+	  // bottom half, only the name over it; with the second one alone it is (2026-10-28, frames of Cliffhanger tarmac). The first is dropped ([native] p0general=1 keeps it).
+		static int keep_general = -1;
+		if (keep_general < 0)
+			keep_general = cfg("p0general", 0);
+		if (ctx_current == 1 && (c & 0xffff) == 0 && !keep_general) {
+			const uint8_t *ret = (const uint8_t *)__builtin_return_address(0);
+			if (ret >= base + 0x9ea20 && ret < base + 0x9ea20 + 1102)
+				return 0;
 		}
 	}
 	return dobj_add_original(a, b, c, d, e, f, g, h);
@@ -3360,6 +3486,13 @@ static void add_entity_hook(int n)
 				memcpy(slot1_saved, base + 0x441070, sizeof(slot1_saved));
 				p0_put(base + 0x441070);
 			}
+			if (n == 0 && CFG_ONCE("p0log", 0)) { // player 1's body in context 1's draw: the slot as it was drawn (copy of context 0's entity 0)
+				static unsigned pl;
+				const uint8_t *e = base + 0x441070;
+				if (++pl % 10 == 0 && pl < 30000)
+					log_printf("native: p0log ctx1 draws entity0: ok %d copied %d pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x | own p2 pos %.1f %.1f", p0_ent_ok, p0copy, (double)((const float *)e)[63], (double)((const float *)e)[64], (double)((const float *)e)[65],
+						   (double)((const float *)e)[73], e[0xe0], *(const unsigned *)(e + 0xec), *(const unsigned *)(e + 0x18c), (double)*(const float *)(base + 0x42245c), (double)*(const float *)(base + 0x422460));
+			}
 			if (n == 0)
 				lag_record();
 			lag_fix_yaw(n, 0, sv, &ap); // player 0's body in context 1's picture (his entity sits at index 1 after the swap)
@@ -3378,6 +3511,12 @@ static void add_entity_hook(int n)
 			memcpy(p0_ent, base + 0x441070, sizeof(p0_ent));
 			p0_ent_ok = 1;
 			lag_record();
+			if (CFG_ONCE("p0log", 0)) { // what context 0's draw hands over as player 1's entity
+				static unsigned cl0;
+				if (++cl0 % 10 == 0 && cl0 < 30000)
+					log_printf("native: p0log ctx0 captured entity0: pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x", (double)((const float *)p0_ent)[63], (double)((const float *)p0_ent)[64], (double)((const float *)p0_ent)[65],
+						   (double)((const float *)p0_ent)[73], p0_ent[0xe0], *(const unsigned *)(p0_ent + 0xec), *(const unsigned *)(p0_ent + 0x18c));
+			}
 		}
 		lag_fix_yaw(n, 1, sv, &ap); // player 1's body in context 0's picture
 		add_entity_original(n);

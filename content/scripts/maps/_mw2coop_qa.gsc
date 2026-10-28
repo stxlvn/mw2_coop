@@ -90,6 +90,15 @@ main()
 		case "angles":
 			angles_log();
 			break;
+		case "walk50":
+			walk50();
+			break;
+		case "p1far":
+			p1far();
+			break;
+		case "p1front":
+			p1front();
+			break;
 		case "face":
 			face();
 			break;
@@ -331,6 +340,73 @@ common_checks()
 }
 
 // angles: (native split screen test) once a second: where each player is, where he looks (view angles) and which way the other one lies
+// walk50: (native split screen test, "as on ice") player 2's server position and speed every 50 ms with the game time, to set against where the other context
+// draws his body (native.c timelog) while a fake pad walks him forward and back
+// p1front: (native split screen test) player 1 stands still 300 units in front of player 2 from 25 s on, for the whole run: does his body stay in player 2's half with time?
+p1front()
+{
+	thread p1front_frames();
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 25;
+	a = level.player;
+	b = level.player2;
+	yaw = b GetPlayerAngles()[ 1 ];
+	a SetOrigin( b.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 300 + ( 0, 0, 12 ) );
+	a SetPlayerAngles( ( 0, yaw + 180, 0 ) );
+	report( "p1front placed at t " + GetTime() + " p1 " + a.origin + " p2 " + b.origin );
+}
+
+p1front_frames()
+{
+	// a composed frame every 1 s from the start with a line in the log, to line the frames up with the native log's p0cnt/p0dump lines
+	for ( i = 0; i < 70; i++ )
+	{
+		wait 1;
+		SetDvar( "mw2coop_qa_frame", "pf-" + i );
+		report( "pf " + i );
+	}
+}
+
+// p1far: (native split screen test) player 2 stands, player 1 is put in front of him at growing distances, 4 s each (the mod's follow and leash are off): is player 1's body
+// drawn in player 2's half at every distance? Composed frames come from [native] seqat / seqstep.
+p1far()
+{
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 30;
+	a = level.player;
+	b = level.player2;
+	yaw = b GetPlayerAngles()[ 1 ];
+	fwd = AnglesToForward( ( 0, yaw, 0 ) );
+	origin = b.origin;
+	dists = [];
+	dists[ 0 ] = 150;
+	dists[ 1 ] = 500;
+	dists[ 2 ] = 900;
+	dists[ 3 ] = 1400;
+	dists[ 4 ] = 1900;
+	dists[ 5 ] = 2400;
+	foreach ( d in dists )
+	{
+		a SetOrigin( origin + fwd * d + ( 0, 0, 12 ) );
+		a SetPlayerAngles( ( 0, yaw, 0 ) );
+		report( "p1far distance " + d + " t " + GetTime() + " p1 " + a.origin + " p2 " + b.origin );
+		wait 4;
+	}
+	report( "p1far done" );
+}
+
+walk50()
+{
+	for ( ;; )
+	{
+		wait 0.05;
+		b = level.player2;
+		report( "walk50 t " + GetTime() + " p2 " + b.origin + " v " + b GetVelocity() );
+	}
+}
+
 angles_log()
 {
 	for ( ;; )
