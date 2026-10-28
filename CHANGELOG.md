@@ -16,8 +16,16 @@ square around it.
 How: the game's own two-player machinery runs with two client states swapped per frame; the scene's 2D is drawn into
 a layer per half and laid over the squeezed view; the game's 2D placement is made for a half. Details and the research:
 `docs/native-splitscreen-plan.md`. Settings under `[native]` in `settings.ini` are for testing (QA only).
-Known gaps: the second player cannot switch weapons by pad yet (use the d-pad slots), one sound listener, no second
-keyboard, the 32-bit build has the two-process split screen only.
+Controls and lobby: the lobby shows a card for each player (call signs Alpha and Bravo, no nicknames); each presses a button
+on the device they will play on (keyboard and mouse, or a gamepad), a choice can be taken back, Start waits for both. Either
+player can play on a gamepad (console layout, XInput) or the keyboard; the second player cannot work the game's menus, only
+pause. Gamepad extras, as on the console: aim assist (turn slows over a target, lock-on while moving, the aim-down-the-sight
+snap), vibration, and the pad's buttons instead of key names in hints. Options -> Controls has pages "Gamepad: Alpha" and
+"Gamepad: Bravo" (look sensitivity, inverted look, aim assist, swapped sticks, tactical layout, vibration). Red dot sights work
+in both halves, and effects, glass and particles drawn with the 2D no longer veil the top half.
+Known gaps: the gamepad part is tested with simulated gamepads only; a player who changes weapon keeps the first one in his
+hands in the other player's half; one sound listener, no second keyboard (the keyboard goes to one player), the 32-bit build
+has the two-process split screen only.
 
 ## Unreleased (since v0.4.7-beta)
 

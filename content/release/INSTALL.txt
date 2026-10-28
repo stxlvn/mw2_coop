@@ -82,12 +82,19 @@ Uninstall: delete winmm.dll and the mw2coop folder from the game folder. Problem
 EXPERIMENTAL: the built-in split screen (two halves of one window, one PC)
 This prerelease carries an experimental build: besides online co-op it has a SPLIT SCREEN mode for two players on one
 computer. It is rough and may crash; online play does not need it.
-To start it: Campaign -> SPLIT SCREEN. The lobby opens: the first player uses keyboard and mouse, the second presses any
-button on their gamepad (an XInput gamepad). Then Start. The screen is cut into a top
-and a bottom half; the mode switches itself off when you are back in the menus.
-Known issues: the second player can only use a gamepad and switches weapons with the d-pad only; one sound listener;
-the game may not close by itself after quitting (end it in Task Manager);
-64-bit build only. If something is wrong, attach mw2coop\mw2coop.log.
+To start it: Campaign -> SPLIT SCREEN. The lobby opens with two cards, Alpha (the top half) and Bravo (the bottom half).
+Each player presses a button on the device they will play on: a key or the mouse for keyboard and mouse, any button on
+a gamepad (XInput) for a gamepad. Backspace (keyboard) or Back (gamepad) takes the choice back. Start waits until both
+have chosen. Either player can play on either device; two gamepads, or one gamepad and the keyboard, both work.
+The screen is cut into a top and a bottom half; the mode switches itself off when you are back in the menus.
+Gamepad (the console layout): left stick move, right stick look, LT aim, RT fire, A jump, B stance (hold: prone),
+X reload (hold: use), Y next weapon, LB / RB grenades, LS sprint, RS melee, Back objectives, Start pause, d-pad the
+action slots. Aim assist and vibration work as on the console, and hints show the gamepad's buttons instead of keys.
+Per player options (look sensitivity, inverted look, aim assist, swapped sticks, tactical layout, vibration): Options ->
+Controls -> Gamepad: Alpha / Gamepad: Bravo in the main menu. The second player cannot work the menus, only pause.
+Known issues: the gamepad part is tested with simulated gamepads only; a player who changes weapon keeps the first one in
+his hands in the other player's half; one sound listener; the game may not close by itself after quitting (end it in
+Task Manager); 64-bit build only. If something is wrong, attach mw2coop\mw2coop.log.
 
 Not affiliated with or endorsed by Activision or Infinity Ward. mw2coop's own code is MIT
 licensed (LICENSE.txt). No game files are included.
