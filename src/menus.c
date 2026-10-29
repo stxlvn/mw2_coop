@@ -2140,9 +2140,32 @@ static void coop_launch_hook(void)
 	log_printf("menus: no coopLaunch command found (the loading screen look comes from the other launch paths only)");
 }
 
+#ifndef _WIN64
+unsigned char coop_wait_hook32(void);
+unsigned char coop_wait_hook32(void)
+{
+	return coop_wait_hook();
+}
+__asm__(".text\n"
+	".globl _coop_wait_stub\n"
+	"_coop_wait_stub:\n"
+	"\tpushl %ecx\n"
+	"\tpushl %edx\n"
+	"\tcall _coop_wait_hook32\n"
+	"\tpopl %edx\n"
+	"\tpopl %ecx\n"
+	"\tret\n");
+extern char coop_wait_stub[];
+#endif
+
 static void brief_install(void)
 {
+#ifdef _WIN64
 	hook_jump(base + RVA_COOP_WAIT, 16, (void *)coop_wait_hook, 0xcc);
+#else
+	// the original touches only AL and the flags, and its callers (whole-program optimized) keep values in ECX and EDX across it: the stub saves them
+	hook_jump(base + RVA_COOP_WAIT, 16, (void *)coop_wait_stub, 0xcc);
+#endif
 	log_printf("menus: the briefing of a network co-op waits for the film");
 }
 

@@ -329,23 +329,36 @@ static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockadd
 	return r;
 }
 
+// the game's imports are patched in its own image: 64- or 32-bit PE
+#ifdef _WIN64
+typedef IMAGE_NT_HEADERS64 NT_HEADERS;
+typedef IMAGE_THUNK_DATA64 THUNK_DATA;
+#define SNAP_BY_ORDINAL IMAGE_SNAP_BY_ORDINAL64
+#define ORDINAL_OF IMAGE_ORDINAL64
+#else
+typedef IMAGE_NT_HEADERS32 NT_HEADERS;
+typedef IMAGE_THUNK_DATA32 THUNK_DATA;
+#define SNAP_BY_ORDINAL IMAGE_SNAP_BY_ORDINAL32
+#define ORDINAL_OF IMAGE_ORDINAL32
+#endif
+
 void net_install(void)
 {
 	InitializeCriticalSection(&peer_lock);
 	InitializeCriticalSection(&hold_lock);
 	CreateThread(NULL, 0, hold_drain_thread, NULL, 0, NULL);
 	BYTE *base = (BYTE *)GetModuleHandleA(NULL);
-	IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+	NT_HEADERS *nt = (NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
 	IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
 	for (IMAGE_IMPORT_DESCRIPTOR *d = (IMAGE_IMPORT_DESCRIPTOR *)(base + dir.VirtualAddress); d->Name; d++) {
 		if (lstrcmpiA((const char *)(base + d->Name), "WSOCK32.dll") != 0)
 			continue;
-		IMAGE_THUNK_DATA64 *names = (IMAGE_THUNK_DATA64 *)(base + d->OriginalFirstThunk);
-		IMAGE_THUNK_DATA64 *iat = (IMAGE_THUNK_DATA64 *)(base + d->FirstThunk);
+		THUNK_DATA *names = (THUNK_DATA *)(base + d->OriginalFirstThunk);
+		THUNK_DATA *iat = (THUNK_DATA *)(base + d->FirstThunk);
 		for (; names->u1.Ordinal; names++, iat++) {
-			if (!IMAGE_SNAP_BY_ORDINAL64(names->u1.Ordinal))
+			if (!SNAP_BY_ORDINAL(names->u1.Ordinal))
 				continue;
-			WORD ord = (WORD)IMAGE_ORDINAL64(names->u1.Ordinal);
+			WORD ord = (WORD)ORDINAL_OF(names->u1.Ordinal);
 			void *wrapper = NULL;
 			if (ord == 20) {
 				real_sendto = (sendto_t)iat->u1.Function;
@@ -358,7 +371,7 @@ void net_install(void)
 				continue;
 			DWORD old;
 			VirtualProtect(&iat->u1.Function, sizeof(void *), PAGE_READWRITE, &old);
-			iat->u1.Function = (ULONGLONG)wrapper;
+			iat->u1.Function = (ULONG_PTR)wrapper;
 			VirtualProtect(&iat->u1.Function, sizeof(void *), old, &old);
 			log_printf("net: hooked WSOCK32 #%u", ord);
 		}
