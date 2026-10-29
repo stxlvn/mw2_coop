@@ -339,7 +339,7 @@ screenshots on one PC (`MW2COOP_LOBBY=1 sh tools/qa_native.sh 150`), not played 
 - One picture while the pause menu, the briefing, the console have the keys (key catchers at rva 0x533cb0); the split starts when the mission title's black screen is gone (`intro_black` in the
   `_introscreen` patch), with a 45 s timeout for intros that never set the flag.
 - Crash fixes: the removed-entity cleanup freed the same objects from both contexts; the first-person weapon's DObjs shared handles (now context 1 uses local client 1's).
-- Sound listener: only context 0 sets it (hook at rva 0xbd2c5).
+- Sound listener: the engine has two listeners; context 1 sets listener 1 (the call at rva 0xbd130, SND_SetListener rva 0x23db90; the earlier note about rva 0xbd2c5 was wrong: that is the aim assist's target update). Before this fix both contexts wrote listener 0 and the hearing jumped between the players every frame.
 
 ### Open (owner's list, 2026-10-27)
 1. DONE 2026-10-28: subtitles once, in the bottom half, no ghost. The game message windows (rva 0x52f348, outside the swapped ranges, so one set that both contexts draw) are drawn by
