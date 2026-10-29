@@ -18,6 +18,7 @@
 #include "hook.h"
 #include "log.h"
 #include "localize.h"
+#include "menus_ui.h"
 #include "native.h"
 #include "padopts.h"
 #include "padglyphs.h"
@@ -653,7 +654,9 @@ static void compose(IDirect3DDevice9 *dev, int half)
 			}
 			if (lay_have[half] && comp_have[half] && dbg != 1)
 				overlay_layer(dev, half);
-			if (half == 1 && comp_have[1] && lay_have[0] && GetTickCount() - title_tick < 500 && dbg != 1)
+			// (not while player 1 looks through a scope: its black overlay fills his layer below his half as well, and the title elements are still drawn, faded
+			// out, long after the lines are gone: the bottom half went black whenever player 1 aimed with a scope)
+			if (half == 1 && comp_have[1] && lay_have[0] && GetTickCount() - title_tick < 500 && GetTickCount() - scope_tick[0] >= 400 && dbg != 1)
 				overlay_titles(dev);
 		}
 		RECT top = {0, 0, (LONG)d.Width, (LONG)(d.Height / 2)};
@@ -3050,6 +3053,224 @@ static void place_push(void)
 		log_printf("native: the 2D placements are made for a %gx%g half (scale %g)", w, h, s);
 	place_pushed = 1;
 }
+// The HUD laid out as in the console's split screen. The Xbox 360 game draws a half's HUD with split screen versions of its HUD menus (ui/hud_splitscreen.txt:
+// compassv2_ss, weaponinfo_ss, ...): the ammo, the grenades and the compass sit further in from the corner, the hints nearer the cross hair, the low ammo warning
+// bigger, right of the cross hair. The PC game ships that menu list empty and its code never reads the split screen dvars, so while the picture is split the
+// items of the PC's own HUD menus (the cgame's menu list, which both contexts draw) are moved the same way, and put back when it is one picture again ([native]
+// hudss=0 off). The HUD is drawn from an item's rectClient (added to its menu's place), so both rects are moved. A menu is left as it is when its first item is not
+// where the full screen HUD has it (another build of the menus). The PC's d-pad (the action slot keys, bottom centre) has no console counterpart and stays.
+#ifdef _WIN64
+#define CG_DC_RVA 0x51e330   // the cgame's UI context of local client 0 (ui/hud.txt is added to it at rva 0xa6b7f), menus[] at +0x38, their count at +0x1438
+#define ITEM_TEXT_SCALE 0xe0 // itemDef_t: type, dataType, alignment, font, textAlignMode, textalignx, textaligny, textscale
+#else
+#define CG_DC_RVA 0x354d28 // VA 0x754d28 (+ 0x1684 per local client; the list is added at VA 0x5658a4)
+#define ITEM_TEXT_SCALE 0xd4
+#endif
+#define ITEM_RECT_W 0x10
+#define ITEM_RECT_CLIENT (ITEM_RECT + 0x14) // rectClient: x, y, w, h, horizontal and vertical alignment (+0x10, +0x11)
+#ifdef _WIN64
+#define ITEM_OWNER_DRAW 0x40 // windowDef_t: name, rect, rectClient, group, style, border, ownerDraw, ownerDrawFlags, borderSize, staticFlags, dynamicFlags (+0x50)
+#else
+#define ITEM_OWNER_DRAW 0x38
+#endif
+typedef struct {
+	const char *menu;
+	int item;	  // -1: every item of the menu without a line of its own
+	float x0, y0;	  // where the full screen HUD has it (the first item when item is -1): the check that these are the menus the moves are for
+	float dx, dy, w;  // the move; w > 0: the new width
+	int align_v;	  // >= 0: the new vertical alignment
+	float scale;	  // > 0: the new text scale
+} hud_move_t;
+static const hud_move_t hud_moves[] = {
+    {"weaponinfo", 0, -347.333f, -74.6667f, -19.333f, 1.333f, 0, -1, 0}, // the bar under the weapon's name moves less than the rest
+    {"weaponinfo", -1, -347.333f, -74.6667f, -50, 2, 0, -1, 0},		  // ammo, clip pictures, grenades
+    {"compassv2", -1, -86, -74.6667f, -20, 0, 0, -1, 0},
+    {"stance", -1, -84, -76, -20, 0, 0, -1, 0}, // (the PC draws the stance inside the compass, not above the ammo as the console: it moves with the compass)
+    {"reload", 0, -50, -20, 110, -12, 200, -1, 0.5833f}, // "Low ammo" / "Reload": right of the cross hair, bigger
+    {"cursorhints", 0, 0, 70, 0, -42, 0, -1, 0},		      // "Press [Use] to ...": nearer the cross hair
+    {"mantlehint", 0, 0, 126, 0, -46, 0, -1, 0},
+    // (the console puts the scope's "hold breath" hint and the invalid command hint at the top of the half, with an alignment the PC places at the top left:
+    // they stay where the PC has them, above the cross hair, which fits a half)
+};
+#define HUD_MOVES (sizeof(hud_moves) / sizeof(hud_moves[0]))
+typedef struct {
+	uint8_t *item;
+	float was[3], now[3];	// rect: x, y, w
+	float cwas[3], cnow[3]; // rectClient (the one the HUD is drawn from: the menu's place plus this): x, y, w
+	uint8_t was_av, now_av;
+	float was_scale, now_scale;
+} hud_slot_t;
+static hud_slot_t hud_slots[64];
+static int hud_nslots, hud_applied;
+static uint8_t *hud_menu(const char *name, int *count)
+{
+#ifdef _WIN64
+	uint32_t r = CG_DC_RVA;
+#else
+	uint32_t r = XR(0x354d28); // CG_DC_RVA, written out for tools/gen_addr159.py (iw4x-sp: 0 when the 159 build has no match)
+#endif
+	if (!r)
+		return NULL;
+	uint8_t *dc = base + r;
+#ifdef _WIN64
+	uint8_t **menus = (uint8_t **)(dc + 0x38);
+	int n = *(int *)(dc + 0x1438);
+#else
+	uint8_t **menus = (uint8_t **)(dc + 0x38);
+	int n = *(int *)(dc + 0xa38);
+#endif
+	if (n <= 0 || n > 640)
+		return NULL;
+	for (int i = 0; i < n; i++) {
+		const char *mn = menus[i] ? *(const char **)menus[i] : NULL;
+		if (mn && !strcmp(mn, name)) {
+			*count = *(int *)(menus[i] + MENU_ITEM_COUNT);
+			return menus[i];
+		}
+	}
+	return NULL;
+}
+static int near_f(float a, float b)
+{
+	return fabsf(a - b) < 0.05f;
+}
+static void hud_log_menus(void) // QA ([native] hudlog=1): every menu of the cgame's list with its items' rects, alignments and text scales
+{
+#ifdef _WIN64
+	uint32_t r = CG_DC_RVA;
+	int off_count = 0x1438;
+#else
+	uint32_t r = XR(0x354d28);
+	int off_count = 0xa38;
+#endif
+	if (!r)
+		return;
+	uint8_t *dc = base + r;
+	uint8_t **menus = (uint8_t **)(dc + 0x38);
+	int n = *(int *)(dc + off_count);
+	log_printf("native: hudlog: %d menus in the cgame's list", n);
+	for (int m = 0; m < n && m < 640; m++) {
+		if (!menus[m])
+			continue;
+		int ic = *(int *)(menus[m] + MENU_ITEM_COUNT);
+		float *mr = (float *)(menus[m] + ITEM_RECT);
+		log_printf("native: hudlog: %s rect %g %g %g %g align %d %d, %d items", *(const char **)menus[m], mr[0], mr[1], mr[2], mr[3], menus[m][ITEM_RECT_ALIGN_H],
+			   menus[m][ITEM_RECT_ALIGN_V], ic);
+		uint8_t **items = *(uint8_t ***)(menus[m] + MENU_ITEMS);
+		for (int i = 0; i < ic && i < 40; i++) {
+			if (!items[i])
+				continue;
+			float *rc = (float *)(items[i] + ITEM_RECT), *cl = (float *)(items[i] + ITEM_RECT_CLIENT);
+			const char *nm = *(const char **)items[i];
+			log_printf("native: hudlog:   [%d] %s rect %g %g %g %g align %d %d client %g %g type %d ownerdraw %d scale %g", i, nm ? nm : "-", rc[0], rc[1], rc[2], rc[3],
+				   items[i][ITEM_RECT_ALIGN_H], items[i][ITEM_RECT_ALIGN_V], cl[0], cl[1], *(int *)(items[i] + ITEM_TYPE), *(int *)(items[i] + ITEM_OWNER_DRAW),
+				   *(float *)(items[i] + ITEM_TEXT_SCALE));
+		}
+	}
+}
+static void hud_apply(void)
+{
+	static int logged_menus;
+	if (CFG_ONCE("hudlog", 0) && !logged_menus++)
+		hud_log_menus();
+	hud_nslots = 0;
+	int moved_menus = 0;
+	for (size_t m = 0; m < HUD_MOVES; m++) {
+		if (m && !strcmp(hud_moves[m].menu, hud_moves[m - 1].menu))
+			continue; // each menu once, with all its lines
+		int count = 0;
+		uint8_t *menu = hud_menu(hud_moves[m].menu, &count);
+		if (!menu || count <= 0 || count > 32) {
+			log_printf("native: hudss: no HUD menu %s", hud_moves[m].menu);
+			continue;
+		}
+		uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+		const hud_move_t *all = NULL;
+		int ok = 1;
+		for (size_t k = m; k < HUD_MOVES && !strcmp(hud_moves[k].menu, hud_moves[m].menu); k++) {
+			const hud_move_t *mv = &hud_moves[k];
+			int i = mv->item < 0 ? 0 : mv->item;
+			if (mv->item < 0)
+				all = mv;
+			float *rc = i < count && items[i] ? (float *)(items[i] + ITEM_RECT) : NULL;
+			if (!rc || !near_f(rc[0], mv->x0) || !near_f(rc[1], mv->y0)) {
+				log_printf("native: hudss: %s[%d] is at %g %g, not %g %g: the menu is left as it is", mv->menu, i, rc ? rc[0] : 0, rc ? rc[1] : 0, mv->x0, mv->y0);
+				ok = 0;
+			}
+		}
+		if (!ok)
+			continue;
+		for (int i = 0; i < count && hud_nslots < (int)(sizeof(hud_slots) / sizeof(hud_slots[0])); i++) {
+			const hud_move_t *mv = all;
+			for (size_t k = m; k < HUD_MOVES && !strcmp(hud_moves[k].menu, hud_moves[m].menu); k++)
+				if (hud_moves[k].item == i)
+					mv = &hud_moves[k];
+			if (!mv || !items[i])
+				continue;
+			hud_slot_t *s = &hud_slots[hud_nslots++];
+			float *rc = (float *)(items[i] + ITEM_RECT);
+			s->item = items[i];
+			s->was[0] = rc[0], s->was[1] = rc[1], s->was[2] = rc[2];
+			s->was_av = items[i][ITEM_RECT_ALIGN_V];
+			s->was_scale = *(float *)(items[i] + ITEM_TEXT_SCALE);
+			s->now[0] = rc[0] + mv->dx, s->now[1] = rc[1] + mv->dy, s->now[2] = mv->w > 0 ? mv->w : rc[2];
+			float *cl = (float *)(items[i] + ITEM_RECT_CLIENT);
+			s->cwas[0] = cl[0], s->cwas[1] = cl[1], s->cwas[2] = cl[2];
+			s->cnow[0] = cl[0] + mv->dx, s->cnow[1] = cl[1] + mv->dy, s->cnow[2] = mv->w > 0 ? mv->w : cl[2];
+			s->now_av = mv->align_v >= 0 ? (uint8_t)mv->align_v : s->was_av;
+			s->now_scale = mv->scale > 0 ? mv->scale : s->was_scale;
+		}
+		moved_menus++;
+	}
+	hud_applied = 1;
+	static int logged;
+	if (!logged++)
+		log_printf("native: hudss: the HUD is laid out as in the console's split screen (%d items of %d menus)", hud_nslots, moved_menus);
+}
+// every frame while split: the layout is (re)written where an item still has the full screen values (the engine lays a menu out again when it opens it)
+static void hud_write(void)
+{
+	for (int i = 0; i < hud_nslots; i++) {
+		hud_slot_t *s = &hud_slots[i];
+		float *rc = (float *)(s->item + ITEM_RECT), *cl = (float *)(s->item + ITEM_RECT_CLIENT);
+		if (near_f(cl[0], s->cwas[0]) && near_f(cl[1], s->cwas[1])) {
+			cl[0] = s->cnow[0], cl[1] = s->cnow[1], cl[2] = s->cnow[2];
+			s->item[ITEM_RECT_CLIENT + 0x11] = s->now_av;
+			*(float *)(s->item + ITEM_TEXT_SCALE) = s->now_scale;
+		}
+		if (near_f(rc[0], s->was[0]) && near_f(rc[1], s->was[1])) {
+			rc[0] = s->now[0], rc[1] = s->now[1], rc[2] = s->now[2];
+			s->item[ITEM_RECT_ALIGN_V] = s->now_av;
+		}
+	}
+}
+static void hud_restore(void)
+{
+	for (int i = 0; i < hud_nslots; i++) {
+		hud_slot_t *s = &hud_slots[i];
+		float *rc = (float *)(s->item + ITEM_RECT), *cl = (float *)(s->item + ITEM_RECT_CLIENT);
+		if (near_f(cl[0], s->cnow[0]) && near_f(cl[1], s->cnow[1])) {
+			cl[0] = s->cwas[0], cl[1] = s->cwas[1], cl[2] = s->cwas[2];
+			s->item[ITEM_RECT_CLIENT + 0x11] = s->was_av;
+			*(float *)(s->item + ITEM_TEXT_SCALE) = s->was_scale;
+		}
+		if (near_f(rc[0], s->now[0]) && near_f(rc[1], s->now[1])) {
+			rc[0] = s->was[0], rc[1] = s->was[1], rc[2] = s->was[2];
+			s->item[ITEM_RECT_ALIGN_V] = s->was_av;
+		}
+	}
+	hud_applied = 0;
+}
+static void hud_layout_tick(int split)
+{
+	if (split && mode == 10 && CFG_ONCE("hudss", 1)) {
+		if (!hud_applied)
+			hud_apply();
+		hud_write();
+	} else if (hud_applied)
+		hud_restore();
+}
+
 static void place_pop(void)
 {
 	if (!place_pushed)
@@ -3146,6 +3367,7 @@ static void client_frame_hook(void)
 		if (on && !split_on)
 			split_tick = GetTickCount();
 		split_on = on;
+		hud_layout_tick(on); // the console's split screen HUD layout while split, the full screen one otherwise
 	}
 	{ // QA: [native] qa_ads=<ms>: player 0 aims down the sights that long after the picture was split (and [native] qa_ads_off=<ms>: lets go), so that a frame series can be taken in the scope
 		static int ads_at = -2, ads_off = -2, ads_state;
@@ -5339,6 +5561,7 @@ void native_split_stop(void)
 		return;
 	localize_override("COOP_WAITINGFORPLAYER", NULL);
 	localize_override("SPECIAL_OPS_WAITING_OTHER_PLAYER", NULL);
+	hud_layout_tick(0); // the HUD menus get the full screen layout back
 	native_active = 0;
 	mode = 0;
 	ctx_on = 0;

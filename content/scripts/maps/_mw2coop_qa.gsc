@@ -323,6 +323,9 @@ main()
 		case "armed":
 			armed();
 			break;
+		case "hudlayout":
+			hudlayout();
+			break;
 		case "clock":
 			clock();
 			break;
@@ -3734,6 +3737,44 @@ glyphs()
 	SetDvar( "mw2coop_qa_frame", "glyphs" );
 	wait 1;
 	report( "done" );
+}
+
+// hudlayout: (native split screen) both players with the level's weapons and HUD, then a nearly empty clip, so each half shows the ammo, the
+// grenades, the compass, the d-pad, the stance and the low ammo warning (use a level whose script shows the HUD: not the trainer); composed frames "hud-a" (standing) and "hud-b" (crouched, low clip)
+hudlayout()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	if ( !flag_exist( "introscreen_complete" ) || !flag( "introscreen_complete" ) )
+		level waittill_notify_or_timeout( "introscreen_complete", 30 );
+	wait 2;
+	SetSavedDvar( "compass", 1 );
+	SetSavedDvar( "ammoCounterHide", 0 );
+	SetSavedDvar( "hud_showStance", 1 );
+	SetSavedDvar( "actionSlotsHide", 0 );
+	foreach ( player in level.players )
+		if ( player GetCurrentWeapon() == "none" )	// (a level without a starting weapon: the trainer's rifle)
+		{
+			player GiveWeapon( "m4_grunt" );
+			player SwitchToWeapon( "m4_grunt" );
+		}
+	wait 3;
+	SetDvar( "mw2coop_qa_frame", "hud-a" );
+	wait 1;
+	foreach ( player in level.players )
+	{
+		if ( player GetCurrentWeapon() != "none" )
+			player SetWeaponAmmoClip( player GetCurrentWeapon(), 2 );
+		player SetStance( "crouch" );
+	}
+	wait 2;
+	SetDvar( "mw2coop_qa_frame", "hud-b" );
+	wait 1;
+	report( "player 1 holds " + level.player GetCurrentWeapon() + ", player 2 " + level.player2 GetCurrentWeapon() );
+	wait 3;	// (with [native] qa_ads / qa_ads1 a player aims down the sights by now: the scope with the low ammo warning on)
+	SetDvar( "mw2coop_qa_frame", "hud-c" );
+	wait 2;
+	SetDvar( "mw2coop_qa_frame", "hud-d" );
+	wait 1;
 }
 
 // both players armed and facing each other 150 units apart ([native] entdump=1 logs the entity

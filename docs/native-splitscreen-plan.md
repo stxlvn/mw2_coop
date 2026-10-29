@@ -395,3 +395,23 @@ one. Both contexts run as local client 0, so both halves drew the same system an
 block of the system (header, its 0x10ea80-byte pools, the trailing 0x4810 bytes; 32 bits: header, 0x4810 block, 0x107a80-byte pools) is one more swapped range (`RANGE_FX`,
 [native] fxsplit=0 off): 64 bits rva 0xbc7300..0xcdb110, 32 bits rva 0x983e80..0xa90c80, about 1.1 MB per swap. Confirmed live by the owner in both builds.
 
+### The HUD laid out as in the console's split screen (2026-10-29)
+Reference: an IW4 rawfile dump (https://github.com/FreeTheTech101/IW4-Dump-Files, reference only, nothing copied) has the Xbox 360 game's `ui/hud_splitscreen.txt`: split screen
+versions of the HUD menus (`weaponinfo_ss`, `compassv2_ss`, `cursorhints_ss`, ...). Compared with `ui/hud.txt` they move the ammo and grenades 50 units in from the right edge
+(the bar under the weapon name 19.3), the compass 20, the "Press [Use]" hint from 70 to 28 below the centre, the mantle hint from 126 to 80, and the low ammo / reload warning
+right of the cross hair and bigger (rect 60 -32 200 100, text scale 0.583). The PC zone's `ui/hud_splitscreen.txt` is an empty list (no `_ss` menu is in the PC zones), the
+menu keyword `legacySplitScreenScale` (window static flag 0x4000000, parse handler VA 0x62a3f0 in 32 bits) is parsed but never tested, and `waypointSplitscreenScale` (dvar
+pointer rva 0x4003f0) is registered and never read: the PC has no split screen HUD code left.
+So while the picture is split (`hud_layout_tick`, [native] hudss=0 off) the items of the PC's own HUD menus are moved the same way, in the cgame's UI context (rva 0x51e330, 64
+bits; VA 0x754d28 + 0x1684 per local client, 32 bits; iw4x-sp 0x357d28 via XR), which both contexts draw. The HUD is drawn from an item's `rectClient` added to its menu's place:
+moving `rect` alone changed nothing on screen; both are moved (text scale itemDef +0xe0 / +0xd4). A menu whose first item is not where the full screen HUD has it is left alone.
+Left as the PC has them: the d-pad (the PC's action slot keys, bottom centre, no console counterpart), the hold breath and invalid command hints (the console's vertical
+alignment 8 put them top left on the PC; above the cross hair they fit a half). The stance moves with the compass (the PC draws it inside the compass).
+QA: scenario `hudlayout` (both players with the level's weapons, then a nearly empty clip; frames hud-a .. hud-d), on a level whose script shows the HUD (not the trainer:
+its script hides it); `[native] hudlog=1` logs every menu of the cgame's list with its items' rects. Checked on Contingency frames: the ammo moved 56 px in, the reload
+warning right of the cross hair. Note: the ammo counter fades out when not used, so a frame without it is not a placement bug.
+
+### Player 1's scope blacked out the bottom half (2026-10-29, fixed)
+Owner, live: when player 1 aimed with a scope the bottom half went black. The title lines' overlay (`overlay_titles`) lays context 0's layer rows below its half over the
+bottom half while `title_tick` is fresh, and the intro's title elements are still drawn (faded out) long after the lines are gone; the scope's black overlay fills that layer
+below the half too. Reproduced with `[native] qa_ads` on Contingency, gone with `titles=0`; now the overlay is skipped while the top half is scoped (`scope_tick[0]`).
