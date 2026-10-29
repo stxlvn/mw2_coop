@@ -21,8 +21,21 @@
 
 #ifdef _WIN64
 #define RVA_DB_FIND 0x0ef5d0 // void *DB_FindXAssetHeader(int type, const char *name)
-#define ASSET_MATERIAL 5
 #define MATERIAL_TABLE 0x60
+#define IMAGE_DIMS 0x18
+#define TEXT_DRAW_SITE 0x44c12 // the text command's call of the text draw
+#define BINDING_SITE_A 0x2513ce // the text localizer's call of the binding function
+#define BINDING_SITE_B 0x1913fa // the scripts' GetKeyBinding
+#else
+// the 32-bit official build (docs/32bit-native-map/inputui.md)
+#define RVA_DB_FIND 0x0f6f10
+#define MATERIAL_TABLE 0x54
+#define IMAGE_DIMS 0x14
+#define TEXT_DRAW_SITE 0x13919d
+#define BINDING_SITE_A 0x2235f6
+#define BINDING_SITE_B 0x1d51f6
+#endif
+#define ASSET_MATERIAL 5
 #define ICON 64
 #define ICON_SIZE 54 // the text draw's size byte: (54 - 16) / 32 of the font's height ~ 1.2
 
@@ -196,7 +209,7 @@ static void make_materials(void)
 		memcpy(tab, table, 0x40);
 		memcpy(img, image, 0x80);
 		*(IDirect3DTexture9 **)img = tex;
-		*(uint16_t *)(img + 0x18) = ICON, *(uint16_t *)(img + 0x1a) = ICON;
+		*(uint16_t *)(img + IMAGE_DIMS) = ICON, *(uint16_t *)(img + IMAGE_DIMS + 2) = ICON;
 		for (int i = 0; i < 4; i++)
 			if (*(uint8_t **)(tab + i * 16 + 8) == image)
 				*(uint8_t **)(tab + i * 16 + 8) = img;
@@ -210,8 +223,8 @@ static void make_materials(void)
 	log_printf("padglyphs: %d button pictures made", materials[0] ? BUTTONS : 0);
 }
 
-static unsigned (*binding_original[2])(int64_t, const char *, char *);
-static unsigned binding(int which, int64_t lc, const char *cmd, char *out)
+static unsigned (*binding_original[2])(intptr_t, const char *, char *);
+static unsigned binding(int which, intptr_t lc, const char *cmd, char *out)
 {
 	int tactical = 0;
 	int pl = pad_player_of && cmd ? pad_player_of(&tactical) : -1;
@@ -223,11 +236,11 @@ static unsigned binding(int which, int64_t lc, const char *cmd, char *out)
 	out[0x80] = 0;
 	return 1;
 }
-static unsigned binding0(int64_t lc, const char *cmd, char *out)
+static unsigned binding0(intptr_t lc, const char *cmd, char *out)
 {
 	return binding(0, lc, cmd, out);
 }
-static unsigned binding1(int64_t lc, const char *cmd, char *out)
+static unsigned binding1(intptr_t lc, const char *cmd, char *out)
 {
 	return binding(1, lc, cmd, out);
 }
@@ -251,8 +264,8 @@ __attribute__((used)) const char *padglyphs_text(const char *text)
 				n -= 2; // the key's highlight colour ("^3", the localizer's): it would tint the picture
 			if (materials[b]) {
 				out[n++] = '^', out[n++] = 1, out[n++] = ICON_SIZE, out[n++] = ICON_SIZE;
-				memcpy(out + n, &materials[b], 8);
-				n += 8;
+				memcpy(out + n, &materials[b], sizeof(void *));
+				n += sizeof(void *); // (8 bytes in 64 bits, 4 in 32)
 			} else
 				for (const char *s = fallback[b]; *s; s++)
 					out[n++] = *s;
@@ -265,6 +278,7 @@ __attribute__((used)) const char *padglyphs_text(const char *text)
 }
 
 // the stub at the text command's call of the text draw: the text (rcx) through padglyphs_text, every other argument (rdx, r8, r9, xmm0-3, the stack) as it was
+#ifdef _WIN64
 __attribute__((used)) static void *draw_original;
 void padglyphs_draw_stub(void);
 __asm__(".text\n"
@@ -292,21 +306,29 @@ __asm__(".text\n"
 	"\tmov %rax, %rcx\n"
 	"\tjmp *draw_original(%rip)\n");
 
+#else
+// 32 bits: the text is the first stack argument of the text draw
+__attribute__((used)) void *draw_original;
+void padglyphs_draw_stub(void);
+__asm__(".text\n"
+	".globl _padglyphs_draw_stub\n"
+	"_padglyphs_draw_stub:\n"
+	"\tpushl 4(%esp)\n"
+	"\tcall _padglyphs_text\n"
+	"\taddl $4, %esp\n"
+	"\tmovl %eax, 4(%esp)\n"
+	"\tjmp *_draw_original\n");
+#endif
+
 void padglyphs_install(int (*pad_player)(int *tactical))
 {
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	pad_player_of = pad_player;
 	// the draw first: without it a marker would be drawn as two letters
-	int ok = hook_call(base + 0x44c12, (void *)padglyphs_draw_stub, &draw_original);
+	int ok = hook_call(base + TEXT_DRAW_SITE, (void *)padglyphs_draw_stub, &draw_original);
 	if (ok) {
-		ok &= hook_call(base + 0x2513ce, (void *)binding0, (void **)&binding_original[0]);
-		ok &= hook_call(base + 0x1913fa, (void *)binding1, (void **)&binding_original[1]);
+		ok &= hook_call(base + BINDING_SITE_A, (void *)binding0, (void **)&binding_original[0]);
+		ok &= hook_call(base + BINDING_SITE_B, (void *)binding1, (void **)&binding_original[1]);
 	}
 	log_printf("padglyphs: %s", ok ? "pad buttons as pictures in texts" : "a call site is not as expected, some texts keep key names");
 }
-#else
-void padglyphs_install(int (*pad_player)(int *tactical))
-{
-	(void)pad_player;
-}
-#endif

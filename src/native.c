@@ -5195,9 +5195,7 @@ void native_install(void)
 #endif
 	for (size_t i = 0; i < sizeof(native_commands) / sizeof(native_commands[0]); i++)
 		game_add_command(&native_commands[i]);
-#ifdef _WIN64
 	padglyphs_install(text_pad_player);
-#endif
 #ifdef _WIN64
 	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 		log_printf("native: dobj add bytes differ (treelog in the plain game)");
