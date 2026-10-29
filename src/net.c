@@ -119,8 +119,10 @@ int net_send_mod(const char *text)
 	if (n <= 0 || n >= (int)sizeof(pkt) || !real_sendto)
 		return 0;
 	EnterCriticalSection(&peer_lock);
-	int ok = peer_socket != INVALID_SOCKET &&
-		 send_to(peer_socket, pkt, n, 0, (const struct sockaddr *)&peer, sizeof(peer)) == n;
+	// the game's own socket as it is now (the one the game sent its last out-of-band packet from) is the one its receiver listens with; the one noted at the join may be gone
+	SOCKET use = game_socket != INVALID_SOCKET ? game_socket : peer_socket;
+	int sent_n = use != INVALID_SOCKET && peer_socket != INVALID_SOCKET ? send_to(use, pkt, n, 0, (const struct sockaddr *)&peer, sizeof(peer)) : -2;
+	int ok = sent_n == n;
 	LeaveCriticalSection(&peer_lock);
 	return ok;
 }
@@ -212,7 +214,82 @@ static int WINAPI my_sendto(SOCKET s, const char *buf, int len, int flags, const
 	return send_to(s, buf, len, flags, to, tolen);
 }
 
+
+// While a briefing waits (menus.c) the engine's server frame does not read its socket, so a partner's "my briefing is over" would stay in the socket until the wait is over. A thread reads
+// the socket meanwhile (recv_filtered: our packets are acted on there) and keeps what is the game's in a queue, which the game's own reads empty first: nothing is lost. Packets of the
+// connection (not out of band) are kept only the last 64: the netchan resends what matters.
+typedef struct {
+	int len, fromlen;
+	struct sockaddr_storage from;
+	char data[1500];
+} held_packet_t;
+#define HOLD_Q 128
+static held_packet_t hold_q[HOLD_Q];
+static int hold_head, hold_count;
+static CRITICAL_SECTION hold_lock;
+
+static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen);
+
 static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen)
+{
+	if (hold_count && !(flags & MSG_PEEK)) {
+		EnterCriticalSection(&hold_lock);
+		if (hold_count) {
+			held_packet_t *h = &hold_q[hold_head];
+			int n = h->len < len ? h->len : len;
+			memcpy(buf, h->data, n);
+			if (from && fromlen && *fromlen >= h->fromlen) {
+				memcpy(from, &h->from, h->fromlen);
+				*fromlen = h->fromlen;
+			}
+			hold_head = (hold_head + 1) % HOLD_Q;
+			hold_count--;
+			LeaveCriticalSection(&hold_lock);
+			return n;
+		}
+		LeaveCriticalSection(&hold_lock);
+	}
+	return recv_filtered(s, buf, len, flags, from, fromlen);
+}
+
+static DWORD WINAPI hold_drain_thread(LPVOID unused)
+{
+	(void)unused;
+	for (;;) {
+		Sleep(5);
+		if (!menus_briefing_holds())
+			continue;
+		EnterCriticalSection(&peer_lock);
+		SOCKET s = peer_socket;
+		LeaveCriticalSection(&peer_lock);
+		if (s == INVALID_SOCKET)
+			continue;
+		for (int i = 0; i < 64; i++) {
+			char buf[1500];
+			struct sockaddr_storage from;
+			int fl = sizeof(from);
+			int r = recv_filtered(s, buf, sizeof(buf), 0, (struct sockaddr *)&from, &fl);
+			if (r <= 0)
+				break;
+			EnterCriticalSection(&hold_lock);
+			int oob = r >= 4 && *(const unsigned int *)buf == 0xffffffffu;
+			if (hold_count == HOLD_Q || (!oob && hold_count >= 64)) { // drop the oldest
+				hold_head = (hold_head + 1) % HOLD_Q;
+				hold_count--;
+			}
+			held_packet_t *h = &hold_q[(hold_head + hold_count) % HOLD_Q];
+			h->len = r;
+			h->fromlen = fl;
+			memcpy(&h->from, &from, fl);
+			memcpy(h->data, buf, r);
+			hold_count++;
+			LeaveCriticalSection(&hold_lock);
+		}
+	}
+	return 0;
+}
+
+static int recv_filtered(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen)
 {
 	int r = steamnet_receive(buf, len, from, fromlen);
 	if (r <= 0)
@@ -255,6 +332,8 @@ static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct so
 void net_install(void)
 {
 	InitializeCriticalSection(&peer_lock);
+	InitializeCriticalSection(&hold_lock);
+	CreateThread(NULL, 0, hold_drain_thread, NULL, 0, NULL);
 	BYTE *base = (BYTE *)GetModuleHandleA(NULL);
 	IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
 	IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];

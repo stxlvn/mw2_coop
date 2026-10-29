@@ -20,6 +20,8 @@ void menus_log_items(const char *menu_name);
 void menus_find_text(const char *needle);
 // progress.c: the host's start packet came: the loading screen is the campaign's (specialops 0 until the level is over)
 void menus_campaign_loading_begin(void);
+// net.c: this PC waits in a campaign briefing (the game does not read its socket meanwhile)
+int menus_briefing_holds(void);
 void menus_log_instances(const char *name, const char *mat);
 void menus_log_names(void);
 // instance.c: the second player of a split screen lobby pressed a button or Ready (the lobby texts follow)

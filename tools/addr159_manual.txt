@@ -7,3 +7,4 @@
 0x331aec -> 0x334aec    # builtin entry playrumbleonposition (the empty builtin, found by its name)
 0x331af8 -> 0x334af8    # builtin entry playrumblelooponposition (the empty builtin, found by its name)
 0x331b04 -> 0x334b04    # builtin entry stopallrumbles (the empty builtin, found by its name)
+0xaf719 -> 0x102589    # found by moved-data-address matching before more anchors were added; the iw4x split screen ran with it
