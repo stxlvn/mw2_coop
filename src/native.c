@@ -2827,6 +2827,18 @@ static void client_frame_hook(void)
 		*(int *)(gun_dvar + 0x10) = 1;
 	pad_frame_player(0, 1);
 	body_dobj_sync();
+	if (native_active && CFG_ONCE("clocklog", 0)) { // QA: the game's clock (QA scenario clock) against the wall clock: milliseconds of game time per wall second
+		static DWORD wall0;
+		static int game0, n;
+		char v[16];
+		DWORD wall = GetTickCount();
+		if ((!wall0 || wall - wall0 >= 1000) && game_dvar_raw("mw2coop_qa_t", v, sizeof(v))) {
+			int game = atoi(v);
+			if (wall0 && n < 60)
+				log_printf("native: clock: game time +%d ms in %lu ms of wall time", game - game0, (unsigned long)(wall - wall0)), n++;
+			wall0 = wall, game0 = game;
+		}
+	}
 	if (native_active) { // the menu tick does not run in a level: the pause menu's Options > Controls gets the gamepad pages from here (a level load may reload the menus)
 		static DWORD opts_at;
 		if (GetTickCount() - opts_at >= 1000) {

@@ -311,6 +311,9 @@ main()
 		case "armed":
 			armed();
 			break;
+		case "clock":
+			clock();
+			break;
 		default:
 			report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );
 	}
@@ -3661,5 +3664,15 @@ armed_watch( who )
 		self waittill( "weaponchange" );
 		SetDvar( "mw2coop_qa_log", "weaponchange " + who + ": " + self GetCurrentWeapon() + ", model " + self GetPlayerWeaponModel() );
 		wait 0.3;
+	}
+}
+
+// the level's game time into a dvar every frame, which [native] clocklog=1 compares with the wall clock once a second
+clock()
+{
+	for ( ;; )
+	{
+		SetDvar( "mw2coop_qa_t", GetTime() );
+		wait 0.05;
 	}
 }
