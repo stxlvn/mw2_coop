@@ -108,6 +108,9 @@ main()
 		case "p2walk":
 			p2walk();
 			break;
+		case "veil":
+			veil();
+			break;
 		case "face":
 			face();
 			break;
@@ -376,6 +379,48 @@ p1front()
 	a SetOrigin( b.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 300 + ( 0, 0, 12 ) );
 	a SetPlayerAngles( ( 0, yaw + 180, 0 ) );
 	report( "p1front placed at t " + GetTime() + " p1 " + a.origin + " p2 " + b.origin );
+}
+
+// veil: (native split screen test) both players face each other like in "armed"; the white haze around a body in the other player's half is checked against the game's
+// own effects switch: a frame with fx_draw 1, a frame with fx_draw 0, a frame with fx_draw 1 again.
+veil()
+{
+	if ( !flag_exist( "introscreen_complete" ) || !flag( "introscreen_complete" ) )
+		level waittill_notify_or_timeout( "introscreen_complete", 30 );
+	wait 2;
+	p1 = level.player;
+	p2 = level.player2;
+	yaw = p1 GetPlayerAngles()[ 1 ] + GetDvarInt( "mw2coop_qa_yawoff" );
+	ahead = p1.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 250;
+	p2 SetOrigin( PlayerPhysicsTrace( ahead + ( 0, 0, 48 ), ahead - ( 0, 0, 96 ) ) );
+	for ( step = 0; step < 2; step++ )
+	{
+		if ( step == 1 )
+			SetDvar( "fx_draw", "0" );
+		else
+			SetDvar( "fx_draw", "1" );
+		for ( t = 0; t < 30; t++ )
+		{
+			p1 SetPlayerAngles( VectorToAngles( p2 GetEye() - ( 0, 0, 20 ) - p1 GetEye() ) );
+			p2 SetPlayerAngles( VectorToAngles( p1 GetEye() - ( 0, 0, 20 ) - p2 GetEye() ) );
+			wait 0.05;
+		}
+		// player 1 fires for 1.2 s; the frames are 0.4 s and 0.9 s into the burst
+		press( p1, "attack", 1200 );
+		for ( t = 0; t < 40; t++ )
+		{
+			p1 SetPlayerAngles( VectorToAngles( p2 GetEye() - ( 0, 0, 20 ) - p1 GetEye() ) );
+			p2 SetPlayerAngles( VectorToAngles( p1 GetEye() - ( 0, 0, 20 ) - p2 GetEye() ) );
+			if ( t == 5 )
+				SetDvar( "mw2coop_qa_frame", "veil-" + step + "a" );
+			if ( t == 14 )
+				SetDvar( "mw2coop_qa_frame", "veil-" + step + "b" );
+			wait 0.05;
+		}
+		wait 3;
+	}
+	SetDvar( "fx_draw", "1" );
+	report( "done" );
 }
 
 // p2walk: (native split screen test) player 1 stands, player 2 walks forward / back / left / right on the pad dvar from 15 s on (1.5 s each, three rounds), the mod's follow and

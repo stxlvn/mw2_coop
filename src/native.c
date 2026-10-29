@@ -1864,7 +1864,10 @@ static const range_t ranges[] = {
     {0x545844, 0x3218},              // clc: reliable command ring
     {0x548ce8, 8},                   // the snapshot message's time and flag
     {0x3cf180, 0xe80},               // aim assist of local client 0 (aaGlob: the targets on screen, the aim_* regions): each context's cgame fills its own
+    {0xbc7300, 0xcdb110 - 0xbc7300}, // the effects system of local client 0 (FX_InitSystem 0x119a00: header 0xb18, its pools from 0xbc7e80, 0x10ea80 bytes, then 0xcd6900 + 0x4810):
+                                     // with one system both halves drew the muzzle flash and smoke of the first-person weapon of the other ([native] fxsplit=0 off)
 };
+#define RANGE_FX 9
 #else
 // 32 bits (docs/32bit-native-map/clientctx.md): the same eight kinds of state in the same order (the code indexes them), the cgame block in two parts: [0] is its main part
 // (the first 135 entities included, as in 64 bits) and [9] the view model pointers behind the entity array
@@ -1926,9 +1929,16 @@ static void ctx_swap_mask(int to, unsigned mask)
 	ctx_ensure();
 	ctx_wait_workers();
 	LONGLONG t0 = perf_now();
+	static int fx_on = -1;
+	if (fx_on < 0)
+		fx_on = cfg("fxsplit", 1);
 	for (size_t i = 0; i < NRANGES; i++) {
 		if (!(mask & (1u << i)))
 			continue;
+#ifdef RANGE_FX
+		if (i == RANGE_FX && !fx_on)
+			continue;
+#endif
 		uint8_t *live = base + ranges[i].rva;
 		memcpy(ctx_store[ctx_current][i], live, ranges[i].size);
 		memcpy(live, ctx_store[to][i], ranges[i].size);
