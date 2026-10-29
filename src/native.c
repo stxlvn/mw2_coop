@@ -263,6 +263,12 @@ static void jhook_jump(uint8_t *target, size_t len, const void *replacement, uin
 
 // The settings of the split screen: settings.ini [native] for the QA runs; a session started from the menu uses the values the feature ships with (from_menu) unless the file says otherwise
 int native_active; // (read by the asm stub of the 32-bit view model hook)
+#ifdef _WIN64
+void *snd_ctx_ptr, *snd_count_orig; // (the sound counter's stub, see snd_count_stub)
+volatile LONG snd_counts[2];
+struct snd_name { const char *name; LONG n[2]; };
+static struct snd_name snd_names[512];
+#endif
 static int from_menu;
 static int menu_pad = -1, menu_pad0 = -1; // the lobby's devices of player 2 and player 1 (-1: the keyboard and mouse)
 static int cfg(const char *key, int def)
@@ -810,6 +816,13 @@ static void perf_report(void)
 		const uint8_t *l = base + 0x1a28f48;
 		log_printf("native: sound listeners: 0 %s at %.0f %.0f %.0f, 1 %s at %.0f %.0f %.0f", l[0x38] ? "on" : "off", (double)((const float *)l)[0], (double)((const float *)l)[1], (double)((const float *)l)[2],
 			   l[0x3c + 0x38] ? "on" : "off", (double)((const float *)(l + 0x3c))[0], (double)((const float *)(l + 0x3c))[1], (double)((const float *)(l + 0x3c))[2]);
+		if (snd_ctx_ptr)
+			log_printf("native: world sounds started per second: context 0 %ld, context 1 %ld", (long)InterlockedExchange(&snd_counts[0], 0), (long)InterlockedExchange(&snd_counts[1], 0));
+		for (int i = 0; i < 512 && snd_ctx_ptr && snd_names[i].name; i++) {
+			if (snd_names[i].n[0] + snd_names[i].n[1] > 0 && !IsBadReadPtr(snd_names[i].name, 4))
+				log_printf("native:   sound %s: context 0 %ld, context 1 %ld", snd_names[i].name, (long)snd_names[i].n[0], (long)snd_names[i].n[1]);
+			snd_names[i].n[0] = snd_names[i].n[1] = 0;
+		}
 	}
 #elif !defined(MW2COOP_IW4X)
 	if (CFG_ONCE("sndlog", 0)) {
@@ -4835,6 +4848,59 @@ HUD_X(0, 0x10)  // 0xbd03b be710
 HUD_X(1, 0x20)  // 0xbd0fb 11f0c0 (4 arguments)
 HUD_X(2, 0x40)  // 0xbd102 1214e0
 HUD_X(3, 0x80)  // 0xbd109 fd010
+#ifdef _WIN64
+// Diagnostics ([native] sndcount=1, with sndlog=1 in the report): how often each context starts a world sound (rva 0x23a9b0); a stub that counts and jumps on
+extern char snd_count_stub[];
+void snd_note(const char **alias); // (below: counts per alias name)
+__asm__(".text\n.globl snd_count_stub\nsnd_count_stub:\n"
+	"\tpush %rax\n"
+	"\tpush %rcx\n"
+	"\tpush %rdx\n"
+	"\tpush %r8\n"
+	"\tpush %r9\n"
+	"\tpush %r10\n"
+	"\tpush %r11\n"
+	"\tsub $0x60, %rsp\n"
+	"\tmovdqu %xmm0, 0x20(%rsp)\n"
+	"\tmovdqu %xmm1, 0x30(%rsp)\n"
+	"\tmovdqu %xmm2, 0x40(%rsp)\n"
+	"\tmovdqu %xmm3, 0x50(%rsp)\n"
+	"\tcall snd_note\n"
+	"\tmovdqu 0x20(%rsp), %xmm0\n"
+	"\tmovdqu 0x30(%rsp), %xmm1\n"
+	"\tmovdqu 0x40(%rsp), %xmm2\n"
+	"\tmovdqu 0x50(%rsp), %xmm3\n"
+	"\tadd $0x60, %rsp\n"
+	"\tpop %r11\n"
+	"\tpop %r10\n"
+	"\tpop %r9\n"
+	"\tpop %r8\n"
+	"\tpop %rdx\n"
+	"\tpop %rcx\n"
+	"\tpop %rax\n"
+	"\tjmp *snd_count_orig(%rip)\n"
+	);
+// the aliases' start counts of the last second, per context ([native] sndcount=1: totals, 2: names too)
+void snd_note(const char **alias)
+{
+	int c = ctx_current & 1;
+	InterlockedIncrement(&snd_counts[c]);
+	const char *name = alias ? *alias : NULL;
+	if (!name || cfg("sndcount", 0) < 2)
+		return;
+	for (int i = 0; i < 512; i++) {
+		if (snd_names[i].name == name) {
+			snd_names[i].n[c]++;
+			return;
+		}
+		if (!snd_names[i].name) {
+			snd_names[i].name = name;
+			snd_names[i].n[c] = 1;
+			return;
+		}
+	}
+}
+#endif
 // 0xbd130 is the cgame's SND_SetListener(local client, ...) (rva 0x23db90): the engine keeps two listeners (rva 0x1a28f48, 0x3c bytes each; every sound is heard by the nearer one, like on the console's split screen).
 // Context 1 runs as local client 0, so both contexts set listener 0 and the hearing jumped between the players every frame (constant judder of the sound); context 1 sets listener 1.
 static void hud_x4_hook(void *a, void *b, void *c, void *d, void *e, void *f)
@@ -5469,6 +5535,15 @@ static void contexts_install(void)
 	skip_entity = cfg("skipent", 1); // context 1's own entity (player 2) is never drawn by the first pass either
 	log_entities = cfg("entdraw", 0);
 	{
+		if (cfg("sndcount", 0)) {
+			static const uint8_t snd_play_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x68, 0x18, 0x48, 0x89, 0x70, 0x20};
+			snd_ctx_ptr = &ctx_current;
+			if (!jhook_function(base + 0x23a9b0, snd_play_bytes, sizeof(snd_play_bytes), snd_count_stub, &snd_count_orig))
+				{
+				const uint8_t *t = base + 0x23a9b0;
+				log_printf("native: sound play bytes differ: %02x %02x %02x %02x %02x %02x %02x %02x", t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7]);
+			}
+		}
 		if (!jhook_function(base + 0x9c960, add_entity_bytes, sizeof(add_entity_bytes), add_entity_hook, (void **)&add_entity_original))
 			log_printf("native: add entity bytes differ");
 		if (!jhook_function(base + 0xb0680, pass2_bytes, sizeof(pass2_bytes), pass2_hook, (void **)&pass2_original))
