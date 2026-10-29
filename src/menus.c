@@ -1900,8 +1900,8 @@ void menus_install(void)
 	    !hook_function(base + 0x2442b0, player_info_bytes, sizeof(player_info_bytes), player_info_hook, (void **)&player_info_original))
 		log_printf("menus: coopPlayerInfo not hooked (bytes differ)");
 #else
-	if (memcmp(base + 0x21c430, player_info_bytes, sizeof(player_info_bytes)) ||
-	    !hook_function(base + 0x21c430, player_info_bytes, sizeof(player_info_bytes), n32_player_info_stub, &player_info_target))
+	if (memcmp(base + XR(0x21c430), player_info_bytes, sizeof(player_info_bytes)) ||
+	    !hook_function(base + XR(0x21c430), player_info_bytes, sizeof(player_info_bytes), n32_player_info_stub, &player_info_target))
 		log_printf("menus: coopPlayerInfo not hooked (bytes differ)");
 #endif
 	CreateThread(NULL, 0, lobby_pad_thread, NULL, 0, NULL);

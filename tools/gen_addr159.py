@@ -13,7 +13,7 @@ sys.path.insert(0, HERE)
 import map159  # noqa: E402
 
 SRC = os.path.join(HERE, '..', 'src')
-FILES = ['native.c', 'rumble.c', 'padopts.c', 'padglyphs.c']
+FILES = ['native.c', 'rumble.c', 'padopts.c', 'padglyphs.c', 'menus.c']
 HEX = r'0x[0-9a-fA-F]+'
 
 
