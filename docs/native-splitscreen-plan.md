@@ -388,3 +388,10 @@ Ghidra project of its binary (import only): `local/ghidra-proj-gp` (not in the r
 `MW2COOP_TIMEOUT`; settings `[native]`: `qa_ads=<ms>`, `qa_ads1=<ms>` (scope for player 0 / 1), `layerdebug=1|2|3`, `d3dtrace=1` (`tracepops`, `tracehalf`), `skiphud`, `skiprot`, `skipctx`, `scenescan`,
 `entcleanlog`, `timelog`, `dedupe=0`; console `mw2coop_press <binding> <1|0>`, `mw2coop_qa_move <fwd> <fire>`, `mw2coop_native_start|stop|launch`; `tools/sheet.py`, `tools/crop.py`, `tools/leascan.py`.
 A sleeping display stops Present (the picture freezes): keep the display awake while tests run when the owner is away.
+
+### The white haze of the other player's shots (2026-10-29, fixed)
+The engine keeps one effects system per local client (FX_GetSystem rva 0x1199c0 = 0x140bc7300 + lc * 0xb18; 32 bits VA 0x44bdd0 = 0xd83e80 + lc * 0xad0) but the arrays have room for
+one. Both contexts run as local client 0, so both halves drew the same system and the first-person muzzle flash and smoke of one player filled the other's view with a haze. The
+block of the system (header, its 0x10ea80-byte pools, the trailing 0x4810 bytes; 32 bits: header, 0x4810 block, 0x107a80-byte pools) is one more swapped range (`RANGE_FX`,
+[native] fxsplit=0 off): 64 bits rva 0xbc7300..0xcdb110, 32 bits rva 0x983e80..0xa90c80, about 1.1 MB per swap. Confirmed live by the owner in both builds.
+
