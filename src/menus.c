@@ -84,6 +84,9 @@ typedef struct {
 #endif
 
 static void campaign_loading_begin(void);
+#ifdef _WIN64
+static void briefskip_f(void);
+#endif
 static uint8_t *base;
 #define FN_SLOT_USED(lobby, i) ((char (*)(void *, int))(base + RVA_LOBBY_SLOT_USED))(lobby, i)
 
@@ -1295,8 +1298,19 @@ int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint
 	return 0;
 }
 
+#ifdef _WIN64
+static volatile LONG brief_partner_done; // the partner's briefing film is over or skipped (the packet mw2coop_briefdone)
+#endif
 int menus_on_packet(const char *buf, int len)
 {
+#ifdef _WIN64
+	static const char brief[] = "ÿÿÿÿmw2coop_briefdone";
+	if (len >= (int)sizeof(brief) - 1 && memcmp(buf, brief, sizeof(brief) - 1) == 0) {
+		if (!InterlockedExchange(&brief_partner_done, 1))
+			log_printf("menus: the partner's briefing film is over or skipped");
+		return 1;
+	}
+#endif
 	static const char tag[] = "\xff\xff\xff\xff" READY_TAG;
 	int tl = (int)sizeof(tag) - 1;
 	if (len < tl + 1 || memcmp(buf, tag, tl) != 0)
@@ -1887,6 +1901,9 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_start", NULL, NULL, start_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_menukey", NULL, NULL, menukey_f CMD_NODE_FLAG},
+#ifdef _WIN64
+	{NULL, "mw2coop_briefskip", NULL, NULL, briefskip_f CMD_NODE_FLAG},
+#endif
 	{NULL, "mw2coop_ready", NULL, NULL, ready_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_partner_yes", NULL, NULL, partner_yes_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_member_yes", NULL, NULL, member_yes_f CMD_NODE_FLAG},
@@ -1971,6 +1988,97 @@ static DWORD WINAPI loading_thread(LPVOID unused)
 	return 0;
 }
 
+// The briefing of a network co-op mission. In single player the level waits (the server frame and the UI state "pregame", ui state 3) until the mission's film is over or the player
+// skips it; in the engine's co-op the same wait is the function at rva 0x22e170 ("somebody is not ready": the server frame driver and the UI frame ask it), which lets the level go on
+// as soon as both PCs have loaded, so the film was cut off. Here the function also says "wait" in a campaign co-op while the film plays, and lets go when the film is over or skipped
+// on either PC: each PC tells the other when its own is (the packet mw2coop_briefdone), so a skip on one PC is a skip on both. The split screen has one PC and the single player
+// wait already (engine co-op byte 0).
+#ifdef _WIN64
+#define RVA_COOP_WAIT 0x22e170
+#define RVA_COOP_BYTE_E 0x52fb5c	  // the engine's co-op byte
+#define RVA_UI_STATE 0x1a49dc4
+#define RVA_FILM_ON 0x45859c4		  // the cinematic state the single player test reads (FUN_14000bc30): on, and two counters that differ when it is over
+#define RVA_FILM_A 0x45859cc
+#define RVA_FILM_B 0x45859d0
+#define RVA_ENGINE_WAIT_A 0x192d7e3
+#define RVA_ENGINE_WAIT_B 0x192d8f4
+#define BRIEF_MAX_MS 240000
+static DWORD brief_started, brief_last_call, brief_last_sent;
+static int brief_released;
+
+static int film_over(void)
+{
+	return base[RVA_FILM_ON] && *(volatile int *)(base + RVA_FILM_B) != *(volatile int *)(base + RVA_FILM_A);
+}
+
+// the logic of the wait: 1 = keep waiting. It runs whatever the engine's own flags say (a client waits for the host's release by them, but its own skip has to reach the host)
+static int brief_wait(void)
+{
+	{ // QA runs (mw2coop_qa set) do not wait for the film, unless mw2coop_qa_brief is 1 (the test of the wait itself)
+		char q[32] = "", b[8] = "";
+		game_dvar_raw("mw2coop_qa", q, sizeof(q));
+		game_dvar_raw("mw2coop_qa_brief", b, sizeof(b));
+		if (q[0] && b[0] != '1')
+			return 0;
+	}
+	DWORD now = GetTickCount();
+	if (now - brief_last_call > 3000) { // a new briefing
+		brief_started = now;
+		brief_released = 0;
+		brief_last_sent = 0;
+	}
+	brief_last_call = now;
+	if (brief_released)
+		return 0;
+	int over = film_over();
+	{ // QA: the film state while waiting
+		static int la = -1, lb = -1, lon = -1;
+		int a = *(volatile int *)(base + RVA_FILM_A), b = *(volatile int *)(base + RVA_FILM_B), on = base[RVA_FILM_ON];
+		if (a != la || b != lb || on != lon) {
+			log_printf("menus: briefing wait: film flag %d, counters %d %d (%u ms)", on, a, b, (unsigned)(now - brief_started));
+			la = a, lb = b, lon = on;
+		}
+	}
+	int why = over ? 1 : brief_partner_done ? 2 : now - brief_started > BRIEF_MAX_MS ? 3 : 0;
+	if (over && now - brief_last_sent > 200) { // the partner learns that the film is over here (a few times: UDP)
+		brief_last_sent = now;
+		net_send_mod("mw2coop_briefdone");
+	}
+	if (!why)
+		return 1;
+	brief_released = 1;
+	log_printf("menus: briefing released (%s, %u ms)", why == 1 ? "the film is over or was skipped here" : why == 2 ? "the partner's film is over or skipped" : "time", (unsigned)(now - brief_started));
+	net_send_mod("mw2coop_briefdone");
+	return 0;
+}
+
+static unsigned char coop_wait_hook(void)
+{
+	unsigned char engine = base[RVA_ENGINE_WAIT_B] ? 1 : base[RVA_ENGINE_WAIT_A];
+	if (!campaign_session || !base[RVA_COOP_BYTE_E] || *(volatile int *)(base + RVA_UI_STATE) != 3)
+		return engine;
+	return brief_wait() ? 1 : engine;
+}
+
+#ifdef _WIN64
+// QA: mw2coop_briefskip makes the film look over on this PC (as it does when it ends or is skipped), to test the shared skip without a mouse
+static void briefskip_f(void)
+{
+	base[RVA_FILM_ON] = 1;
+	*(volatile int *)(base + RVA_FILM_A) = *(volatile int *)(base + RVA_FILM_B) + 2;
+	log_printf("menus: QA: the briefing film is made to look over");
+}
+#endif
+static void brief_install(void)
+{
+	hook_jump(base + RVA_COOP_WAIT, 16, (void *)coop_wait_hook, 0xcc);
+	log_printf("menus: the briefing of a network co-op waits for the film");
+}
+#else
+static void brief_install(void) {}
+#endif
+
+
 void menus_poll(void)
 {
 	if (!base)
@@ -1983,8 +2091,18 @@ void menus_poll(void)
 	{ // QA: the UI state of local client 0 (1 main menu, 2 paused, 3 pregame, 6 briefing = the loading screen, 7 victory) and the client state: when does the briefing end?
 		static int last_ui = -99, last_cls = -99;
 		int ui = *(volatile int *)(base + 0x1a49dc4), cls = *(volatile int *)(base + 0x533cb8);
+		if (ui == 3) { // QA: the film state in the pregame (the single player wait reads it)
+			static int la = -1, lb = -1, lon = -1;
+			int a = *(volatile int *)(base + 0x45859cc), b = *(volatile int *)(base + 0x45859d0), on = base[0x45859c4];
+			if (a != la || b != lb || on != lon) {
+				log_printf("menus: pregame film state: flag %d, counters %d %d", on, a, b);
+				la = a, lb = b, lon = on;
+			}
+		}
 		if (ui != last_ui || cls != last_cls) {
 			log_printf("menus: ui state %d, client state %d", ui, cls);
+			if (ui == 6)
+				InterlockedExchange(&brief_partner_done, 0);
 			last_ui = ui, last_cls = cls;
 		}
 	}
@@ -2122,6 +2240,7 @@ void menus_install(void)
 #endif
 	CreateThread(NULL, 0, lobby_pad_thread, NULL, 0, NULL);
 	CreateThread(NULL, 0, loading_thread, NULL, 0, NULL);
+	brief_install();
 	// devmap is a server command: the console node's function is empty and the command goes on
 	// to this node (Cmd_AddServerCommand in SV_AddOperatorCommands, rva 0x22bef0)
 	cmd_function_t *sv_devmap = (cmd_function_t *)(base + RVA_SV_CMD_DEVMAP);

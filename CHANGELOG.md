@@ -27,6 +27,16 @@ A player's body in the other half now shows the weapon he holds, and changes it 
 Known gaps: the gamepad part is tested with simulated gamepads only; one sound listener, no second keyboard (the keyboard goes
 to one player), the 32-bit build has the two-process split screen only.
 
+### Loading screen and briefing of the campaign co-op
+
+The campaign co-op and the split screen now load like single player: the mission's briefing film over the whole picture, the bar at the bottom in the middle. Before, they borrowed Spec Ops'
+loading screen (another version of the film with a black panel and the studio logo, the bar at the left, "waiting for the other player"): the Spec Ops lobby they use sets the game's
+`specialops` dvar, and the loading screen follows it. The dvar is 0 from the launch to the end of the level; Spec Ops is untouched.
+
+In the online co-op the level used to start the moment both PCs had loaded and cut the briefing off. It now waits for the film, as in single player (the level is paused meanwhile, the film
+plays on both PCs); when one player skips the briefing or the film ends on his PC, the other PC lets go at once. (64-bit build; the split screen has the single player wait already.)
+QA runs do not wait (`mw2coop_qa` set; `mw2coop_qa_brief 1` to test the wait).
+
 ## Unreleased (since v0.4.7-beta)
 
 Everything here is in `main` and tested with bots on two game copies on one PC (host + client); none of it has

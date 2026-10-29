@@ -176,8 +176,10 @@ static int is_session_packet(const char *buf, int len)
 {
 	static const char start[] = "\xff\xff\xff\xffmw2coop_start";
 	static const char ready[] = "\xff\xff\xff\xffmw2coop_ready";
+	static const char brief[] = "\xff\xff\xff\xffmw2coop_briefdone";
 	return (len >= (int)sizeof(start) - 1 && memcmp(buf, start, sizeof(start) - 1) == 0) ||
-	       (len >= (int)sizeof(ready) - 1 && memcmp(buf, ready, sizeof(ready) - 1) == 0);
+	       (len >= (int)sizeof(ready) - 1 && memcmp(buf, ready, sizeof(ready) - 1) == 0) ||
+	       (len >= (int)sizeof(brief) - 1 && memcmp(buf, brief, sizeof(brief) - 1) == 0);
 }
 
 static int from_partner(const struct sockaddr *from)
