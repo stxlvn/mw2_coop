@@ -2924,20 +2924,24 @@ static int video_pushed;
 // Mode 10: the engine's 2D screen placements (rva 0x5e0b80, three of 0x70 bytes: scaleVirtualToReal, scaleVirtualToFull, scaleRealToVirtual, viewport position and size, the viewable and the
 // adjustable rectangles; the console's split screen sets the per-client one to the half it draws into) are given the half: a 1920 x height/2 viewport with the scale of that height, so the
 // client lays its 2D out for a half and the text keeps its shape (the virtual canvas becomes wider, as on a 16:9 screen).
+#ifdef _WIN64
 #define PLACE_RVA 0x5e0b80
 #define PLACE_SIZE 0x70
+#define PLACE_PTR(n) ((float *)(base + PLACE_RVA + (n) * PLACE_SIZE))
+#else
+// 32 bits: the three placements are not a regular array (docs/32bit-native-map/render.md): VA 0x937500 (the view's), 0x937578, 0x9375e8
+static const uint32_t place_rvas32[3] = {0x537500, 0x537578, 0x5375e8};
+#define PLACE_PTR(n) ((float *)(base + place_rvas32[n]))
+#endif
 static float place_saved[3][28];
 static int place_pushed;
 static void place_push(void)
 {
-#ifndef _WIN64
-	return; // 32 bits: the 2D placement of the title lines comes with mode 10
-#endif
 	if (!comp_w || !comp_h)
 		return;
 	float w = (float)comp_w, h = (float)(comp_h / 2), s = h / 480.0f, vw = w / s;
 	for (int n = 0; n < 3; n++) {
-		float *p = (float *)(base + PLACE_RVA + n * PLACE_SIZE);
+		float *p = PLACE_PTR(n);
 		if (!place_pushed) {
 			if (p[8] != w || p[9] != (float)comp_h) {
 				log_printf("native: screen placement %d is not the one expected (viewport %g x %g)", n, p[8], p[9]);
@@ -2946,7 +2950,7 @@ static void place_push(void)
 		}
 	}
 	for (int n = 0; n < 3; n++) {
-		float *p = (float *)(base + PLACE_RVA + n * PLACE_SIZE);
+		float *p = PLACE_PTR(n);
 		if (!place_pushed)
 			memcpy(place_saved[n], p, sizeof(place_saved[n]));
 		int safe = place_saved[n][10] > 0; // the two with a safe-area margin keep it (7.5 %)
@@ -2970,13 +2974,10 @@ static void place_push(void)
 }
 static void place_pop(void)
 {
-#ifndef _WIN64
-	return;
-#endif
 	if (!place_pushed)
 		return;
 	for (int n = 0; n < 3; n++)
-		memcpy(base + PLACE_RVA + n * PLACE_SIZE, place_saved[n], sizeof(place_saved[n]));
+		memcpy(PLACE_PTR(n), place_saved[n], sizeof(place_saved[n]));
 	place_pushed = 0;
 }
 
@@ -3647,9 +3648,45 @@ static void name_self_install(void)
 	jhook_jump(site, sizeof(name_self_bytes), stub, 0x90);
 }
 #else
+// 32 bits (docs/32bit-native-map/inputui.md): the loop is its own function (rva 0x15ea00) and the drawing local client is on the stack at [esp+0x3c]; 19 bytes at rva 0x15ea9e
+// (test dl,dl; mov eax,ebp; jz +3; movzx eax,[ecx]; cmp [esp+0x3c],eax; jz next) are replaced by the same test with context 1 skipping client 1 instead (the stub is jumped to, so esp is the loop's)
 static void name_self_install(void)
 {
-	log_printf("native: name_self_install is not ported to the 32-bit build yet");
+	static const uint8_t expected[19] = {0x84, 0xd2, 0x8b, 0xc5, 0x74, 0x03, 0x0f, 0xb7, 0x01, 0x39, 0x44, 0x24, 0x3c, 0x0f, 0x84, 0xe4, 0x00, 0x00, 0x00};
+	uint8_t *site = base + 0x15ea9e;
+	if (memcmp(site, expected, sizeof(expected))) {
+		log_printf("native: the name loop's self test is not the expected code");
+		return;
+	}
+	uint8_t code[64];
+	size_t n = 0;
+	static const uint8_t head[] = {0x84, 0xd2, 0x8b, 0xc5, 0x74, 0x03, 0x0f, 0xb7, 0x01, 0x83, 0x3d}; // ... cmp dword [ctx_current], 1
+	memcpy(code + n, head, sizeof(head));
+	n += sizeof(head);
+	uint32_t at = (uint32_t)(uintptr_t)&ctx_current;
+	memcpy(code + n, &at, 4);
+	n += 4;
+	static const uint8_t mid[] = {0x01, 0x75, 0x05, 0x83, 0xf8, 0x01, 0xeb, 0x04, 0x39, 0x44, 0x24, 0x3c}; // jne +5; cmp eax,1; jmp +4; cmp [esp+0x3c],eax
+	memcpy(code + n, mid, sizeof(mid));
+	n += sizeof(mid);
+	size_t jz_at = n; // jz next (rel32), then jmp to the name drawing
+	code[n++] = 0x0f, code[n++] = 0x84, n += 4;
+	size_t jmp_at = n;
+	code[n++] = 0xe9, n += 4;
+	uint8_t *stub = VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+	if (!stub) {
+		log_printf("native: no page for the name loop stub");
+		return;
+	}
+	memcpy(stub, code, n);
+	int32_t rel = (int32_t)((uintptr_t)(base + 0x15eb95) - (uintptr_t)(stub + jz_at + 6));
+	memcpy(stub + jz_at + 2, &rel, 4);
+	rel = (int32_t)((uintptr_t)(base + 0x15eab1) - (uintptr_t)(stub + jmp_at + 5));
+	memcpy(stub + jmp_at + 1, &rel, 4);
+	DWORD old;
+	VirtualProtect(stub, 0x1000, PAGE_EXECUTE_READ, &old);
+	FlushInstructionCache(GetCurrentProcess(), stub, n);
+	jhook_jump(site, sizeof(expected), stub, 0x90);
 }
 #endif
 
@@ -4683,6 +4720,20 @@ static int hooks_apply32_contexts(void)
 		}
 	if (cfg("entities", 1) && !hooks_apply32_entities())
 		return 0;
+	{ // the 2D texts of the HUD (docs/32bit-native-map/inputui.md): message windows, the title lines' element draw, the names over the other player
+		static const uint8_t msgwin_bytes32[] = {0xa1, 0xc0, 0xa7, 0x86, 0x00};
+		static const uint8_t hudelem_bytes32[] = {0xa1, 0x50, 0x86, 0x75, 0x00};
+		if (!jhook_function(base + 0x713b0, msgwin_bytes32, sizeof(msgwin_bytes32), msgwin_hook, (void **)&msgwin_original))
+			log_printf("native: game message window draw bytes differ");
+		if (cfg("titles", 1) && !jhook_function(base + 0x164b40, hudelem_bytes32, sizeof(hudelem_bytes32), hudelem_hook, (void **)&hudelem_original))
+			log_printf("native: HUD element draw bytes differ");
+		if (cfg("namefix", 1)) {
+			static const uint32_t name_site[] = {0x15eaf9};
+			name_self_install();
+			if (!hook_calls32(name_site, 1, name_get_hook, (void **)&name_get_original, "name lookup"))
+				log_printf("native: no call at the name loop's name lookup");
+		}
+	}
 	if (cfg("experiment", 0) >= 8) { // the console's way (mode 8 / 10): the 2D of the scene goes into layers of its own
 		static const uint32_t scene2d_site[] = {0x1536fc}, final2d_site[] = {0x1537ae}, wait_site[] = {RVA_WAIT_ALPHA_SITE};
 		if (!hook_calls32(scene2d_site, 1, n32_scene2d_stub, &scene2d_target, "scene 2D pass") || !hook_calls32(final2d_site, 1, n32_final2d_stub, &final2d_target, "frame 2D list") ||
