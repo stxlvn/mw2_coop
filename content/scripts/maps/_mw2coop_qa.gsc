@@ -80,6 +80,9 @@ main()
 	maps\_mw2coop::state( "qa running" );	// let start points, regroup and weapon sync run
 	switch ( GetDvar( "mw2coop_qa" ) )
 	{
+		case "frags":
+			frags();
+			break;
 		case "hidep2":
 			wait 5;
 			level.player2 Hide();
@@ -3181,6 +3184,35 @@ qa_stand_at_table( player, at )
 // The level's intro (maps\_introscreen) holds the players until its title has gone. Most intros
 // set the flag introscreen_complete at the end, some only notify it (dc_whitehouse); none takes
 // 15 s.
+// The trainer's frag box (owner, 2026-10-29: grenades could not be picked up in the split screen): each player in turn stands at the box, looks at it and presses Use; his frag count
+// must go up (start the level at the frags with "set start frag")
+frags()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	flag_wait( "frags_have_been_spawned" );
+	wait 4;
+	box = GetEnt( "grenade_box", "targetname" );
+	check( isdefined( box ), "the grenade box exists" );
+	if ( !isdefined( box ) )
+		return;
+	trig = GetEnt( "frag_trigger", "script_noteworthy" );
+	report( "grenade box at " + box.origin + ", frag trigger " + trig.classname + " at " + trig.origin );
+	foreach ( n, player in level.players )
+	{
+		before = player GetWeaponAmmoStock( "fraggrenade" );
+		org = ( trig.origin[ 0 ], trig.origin[ 1 ] + ( n * 8 ), player.origin[ 2 ] );
+		player SetOrigin( org );
+		wait 0.5;
+		player SetPlayerAngles( VectorToAngles( box.origin - player GetEye() ) );
+		wait 1;
+		report( "frags: " + player_name( player ) + " at " + int( Distance2D( player.origin, box.origin ) ) + " from the box, frags " + before + ", presses Use" );
+		press( player, "activate", 1500 );
+		wait 2.5;
+		after = player GetWeaponAmmoStock( "fraggrenade" );
+		check( after > before, "frags: " + player_name( player ) + " picked up grenades (" + before + " -> " + after + ")" );
+	}
+}
+
 wait_intro()
 {
 	if ( !flag_exist( "introscreen_complete" ) || !flag( "introscreen_complete" ) )
