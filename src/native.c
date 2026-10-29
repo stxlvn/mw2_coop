@@ -805,6 +805,19 @@ static void perf_report(void)
 	log_printf("native: perf per second: engine frames %.0f (gap %.2f ms), ctx0 frames %ld (%.2f ms each), ctx1 frames %ld (%.2f ms each), swaps %ld (waits %.1f ms, copies %.1f ms, per second in total), compositor %ld frames (%.2f ms each)",
 		   ng / sec, ng ? (double)perf_gap_sum * ms / ng : 0.0, n0, n0 ? (double)perf_ctx[0] * ms / n0 : 0.0, n1, n1 ? (double)perf_ctx[1] * ms / n1 : 0.0, sw,
 		   (double)perf_wait * ms / sec, (double)perf_copy * ms / sec, nc, nc ? (double)perf_comp * ms / nc : 0.0);
+#ifdef _WIN64
+	if (CFG_ONCE("sndlog", 0)) { // the engine's two sound listeners (rva 0x1a28f48, 0x3c bytes each: origin, active flag at +0x38)
+		const uint8_t *l = base + 0x1a28f48;
+		log_printf("native: sound listeners: 0 %s at %.0f %.0f %.0f, 1 %s at %.0f %.0f %.0f", l[0x38] ? "on" : "off", (double)((const float *)l)[0], (double)((const float *)l)[1], (double)((const float *)l)[2],
+			   l[0x3c + 0x38] ? "on" : "off", (double)((const float *)(l + 0x3c))[0], (double)((const float *)(l + 0x3c))[1], (double)((const float *)(l + 0x3c))[2]);
+	}
+#elif !defined(MW2COOP_IW4X)
+	if (CFG_ONCE("sndlog", 0)) {
+		const uint8_t *l = base + 0x17f5b4c; // rva of the listener array in the official 32-bit build
+		log_printf("native: sound listeners: 0 %s at %.0f %.0f %.0f, 1 %s at %.0f %.0f %.0f", l[0x38] ? "on" : "off", (double)((const float *)l)[0], (double)((const float *)l)[1], (double)((const float *)l)[2],
+			   l[0x3c + 0x38] ? "on" : "off", (double)((const float *)(l + 0x3c))[0], (double)((const float *)(l + 0x3c))[1], (double)((const float *)(l + 0x3c))[2]);
+	}
+#endif
 	{
 		char line[400];
 		int n = snprintf(line, sizeof(line), "native: perf smoothness: engine frame gaps <2/4/6/8/12/16/24/33/50/more ms:");
@@ -4822,7 +4835,29 @@ HUD_X(0, 0x10)  // 0xbd03b be710
 HUD_X(1, 0x20)  // 0xbd0fb 11f0c0 (4 arguments)
 HUD_X(2, 0x40)  // 0xbd102 1214e0
 HUD_X(3, 0x80)  // 0xbd109 fd010
-HUD_X(4, 0x100) // 0xbd130 23db90
+// 0xbd130 is the cgame's SND_SetListener(local client, ...) (rva 0x23db90): the engine keeps two listeners (rva 0x1a28f48, 0x3c bytes each; every sound is heard by the nearer one, like on the console's split screen).
+// Context 1 runs as local client 0, so both contexts set listener 0 and the hearing jumped between the players every frame (constant judder of the sound); context 1 sets listener 1.
+static void hud_x4_hook(void *a, void *b, void *c, void *d, void *e, void *f)
+{
+	if (ctx_current == skip_ctx && (skip_hud_mask & 0x100))
+		return;
+	if (native_active && ctx_current == 1 && CFG_ONCE("snd2", 1))
+		a = (void *)(uintptr_t)1;
+	hud_x_original[4](a, b, c, d, e, f);
+}
+#ifndef _WIN64
+// The same for the 32-bit build: the call at rva 0x66a20 in the cgame draw (SND_SetListener at rva 0x47b70, cdecl: local client first)
+static void (*snd_listener_original)(int, int, void *, void *, void *);
+static void snd_listener_hook(int lc, int a, void *origin, void *axis, void *velocity)
+{
+	static int calls;
+	if (native_active && ctx_current == 1 && CFG_ONCE("snd2", 1))
+		lc = 1;
+	if (calls < 400 && CFG_ONCE("sndlog", 0) && (calls++ % 50) == 0)
+		log_printf("native: sound listener call %d: local client %d, context %d, origin %.0f %.0f %.0f", calls, lc, ctx_current, (double)((float *)origin)[0], (double)((float *)origin)[1], (double)((float *)origin)[2]);
+	snd_listener_original(lc, a, origin, axis, velocity);
+}
+#endif
 HUD_X(5, 0x200) // 0xbd1a4 11a0b0
 HUD_X(6, 0x400) // 0xbd206 c8600
 
@@ -5359,9 +5394,12 @@ static int hooks_apply32_contexts(void)
 	aim_for_client_fn = base + XR(0x15b040);
 	{ // the aim assist's screen targets of each context's cgame and the server's target list of the client it is (docs/32bit-native-map/aimrumble.md 1.4, 1.5)
 		static const uint32_t screen_site[] = {0x66adc}, list_site[] = {0x88ba8};
+		static const uint32_t snd_listener_site[] = {0x66a20};
 		if (!hook_calls32(screen_site, 1, screen_targets_hook, (void **)&screen_targets_original, "screen targets") ||
 		    !hook_calls32(list_site, 1, target_list_hook, (void **)&target_list_original, "target list"))
 			return 0;
+		if (!hook_calls32(snd_listener_site, 1, snd_listener_hook, (void **)&snd_listener_original, "sound listener"))
+			log_printf("native: the sound listener stays shared");
 	}
 	if (cfg("experiment", 0) >= 8) { // the console's way (mode 8 / 10): the 2D of the scene goes into layers of its own
 		static const uint32_t scene2d_site[] = {0x1536fc}, final2d_site[] = {0x1537ae}, wait_site[] = {RVA_WAIT_ALPHA_SITE};
