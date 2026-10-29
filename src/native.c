@@ -2400,6 +2400,20 @@ static int kb_player(void)
 }
 
 // an action of the table at rva 0x3be770 by its name ("+attack" / "-attack", "weapnext"), for local client 0 of the live context
+#ifndef _WIN64
+// 32 bits (docs/32bit-native-map/inputui.md): there is no action table; the buttons are console commands (+attack, -attack, weapnext ...). The command text goes into the command buffer
+// of local client 0 and the buffer is executed at once (Cbuf_Execute, EBX = local client), so it acts on the live context's input block: the player's own, as in the 64-bit build.
+static void cbuf_run_now(void)
+{
+	void *fn = base + 0x2001c0;
+	__asm__ volatile("call *%0" : : "m"(fn), "b"(0) : "eax", "ecx", "edx", "esi", "edi", "memory", "cc");
+}
+static void pad_action(const char *name)
+{
+	((void (*)(int, const char *))(base + 0x9b40))(0, name); // Cbuf_AddText
+	cbuf_run_now();
+}
+#else
 static void pad_action(const char *name)
 {
 	int index = ((int (*)(const char *))(base + 0xd1810))(name);
@@ -2416,6 +2430,7 @@ static void pad_action(const char *name)
 	}
 	((void (*)(int, int, int))(base + 0xce450))(0, index, 0x1ff);
 }
+#endif
 static void pad_binding(const char *name, int down)
 {
 	char full[48];
@@ -2424,10 +2439,19 @@ static void pad_binding(const char *name, int down)
 }
 
 // the engine's key event (rva 0xd0f80: local client, key, down, time), for a menu: K_ENTER 13, K_ESCAPE 27, K_UPARROW 154 .. K_RIGHTARROW 157 (the key name table at rva 0x3bdb70)
+#ifdef _WIN64
 static void pad_key(int key, int down)
 {
 	((void (*)(int, int, int, unsigned))(base + 0xd0f80))(0, key, down, (unsigned)GetTickCount());
 }
+#else
+static void (*key_event_original)(int, int, int, unsigned);
+static void pad_key(int key, int down)
+{
+	key_event_original(0, key, down, (unsigned)GetTickCount());
+	cbuf_run_now(); // (the key's binding went into the command buffer as text)
+}
+#endif
 
 // a stick with a radial dead zone: the length past the dead zone is rescaled to 0..1 and raised to the response curve's exponent
 static void pad_stick(float *x, float *y, float dead, float curve)
@@ -2734,6 +2758,10 @@ static const aa_target_t *aa_find(const uint8_t *aa, int ent)
 // yaw, pitch: this frame's turn from the stick, in the accumulators' senses (yaw left, pitch down positive); move, look: the sticks' deflections (0..1); ads: aiming
 static void aim_assist(int pl, float dt, float *yaw, float *pitch, float move, float look, int ads)
 {
+#ifndef _WIN64
+	(void)pl, (void)dt, (void)yaw, (void)pitch, (void)move, (void)look, (void)ads;
+	return; // 32 bits: the aim assist data (aaGlob, the aim_* dvars) is mapped but not ported yet
+#endif
 	aa_state_t *s = &aa_state[pl];
 	const uint8_t *aa = base + AA_GLOB;
 	int ads_was = s->ads_was;
@@ -3234,7 +3262,9 @@ static void mouse_read2_hook(intptr_t state, float *x, float *y)
 
 // The keyboard's player 2: the event loop's key events (rva 0xd0f80, called at 0x1fbc1d) run with context 1 live, so the keys press his kbuttons (in the swapped input block).
 // Player 2 does not work the menus (owner, 2026-10-28: he only pauses the game): while a menu is open (key catchers 0x10) his key presses go nowhere; the console (0x1) takes them.
+#ifdef _WIN64
 static void (*key_event_original)(int, int, int, unsigned);
+#endif
 static void key_event_hook(int lc, int key, int down, unsigned time)
 {
 	unsigned catchers = *(unsigned *)(base + RVA_KEY_CATCHERS);
@@ -3243,6 +3273,9 @@ static void key_event_hook(int lc, int key, int down, unsigned time)
 	if (native_active && kb_player() == 1 && ctx1_ready && ctx_current == 0 && !(catchers & 0x11)) {
 		ctx_swap(1);
 		key_event_original(lc, key, down, time);
+#ifndef _WIN64
+		cbuf_run_now(); // the binding's text runs now, in context 1 (the command buffer would otherwise run it in whichever context is live later)
+#endif
 		ctx_swap(0);
 		return;
 	}
@@ -4721,7 +4754,10 @@ static int hooks_apply32_contexts(void)
 	if (cfg("entities", 1) && !hooks_apply32_entities())
 		return 0;
 	{ // the 2D texts of the HUD (docs/32bit-native-map/inputui.md): message windows, the title lines' element draw, the names over the other player
+		static const uint8_t key_event_bytes32[] = {0x8b, 0x4c, 0x24, 0x0c, 0x53};
 		static const uint8_t msgwin_bytes32[] = {0xa1, 0xc0, 0xa7, 0x86, 0x00};
+		if (!jhook_function(base + 0xd2350, key_event_bytes32, sizeof(key_event_bytes32), key_event_hook, (void **)&key_event_original))
+			log_printf("native: key event bytes differ");
 		static const uint8_t hudelem_bytes32[] = {0xa1, 0x50, 0x86, 0x75, 0x00};
 		if (!jhook_function(base + 0x713b0, msgwin_bytes32, sizeof(msgwin_bytes32), msgwin_hook, (void **)&msgwin_original))
 			log_printf("native: game message window draw bytes differ");
