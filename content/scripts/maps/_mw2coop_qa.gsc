@@ -400,6 +400,23 @@ p2away()
 		level.player SetOrigin( b.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 250 + ( 0, 0, 12 ) );
 		level.player SetPlayerAngles( ( 0, yaw + 180, 0 ) );
 		report( "p2away: player 1 placed " + level.player.origin + " p2 " + b.origin + " p2 server yaw " + yaw + " p1 yaw " + level.player GetPlayerAngles()[ 1 ] );
+		if ( GetDvarInt( "mw2coop_qa_p2walk" ) )
+		{
+			// player 2 walks on the pad dvar (forward, back, left, right, 1.2 s each, three rounds); the position lines come from p1front_frames
+			wait 3;
+			for ( r = 0; r < 3; r++ )
+			{
+				SetDvar( "mw2coop_qa_pad2", "0 32767 0 0 0 0 0 0" );
+				wait 1.2;
+				SetDvar( "mw2coop_qa_pad2", "0 -32767 0 0 0 0 0 0" );
+				wait 1.2;
+				SetDvar( "mw2coop_qa_pad2", "-32767 0 0 0 0 0 0 0" );
+				wait 1;
+				SetDvar( "mw2coop_qa_pad2", "32767 0 0 0 0 0 0 0" );
+				wait 1;
+			}
+			SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+		}
 		return;
 	}
 	report( "p2away found no free spot" );
@@ -412,7 +429,7 @@ p1front_frames()
 	{
 		wait 1;
 		SetDvar( "mw2coop_qa_frame", "pf-" + i );
-		report( "pf " + i );
+		report( "pf " + i + " p1 " + level.player.origin + " p2 " + level.player2.origin );
 	}
 }
 

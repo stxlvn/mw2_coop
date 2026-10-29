@@ -3089,6 +3089,7 @@ static void video_pop(void)
 // Mode 5: the engine's whole client frame (rva 0xd5b00, called once per engine frame from the main loop at rva 0x1fc331) runs for context 0 on even frames and for context 1 on odd ones, so
 // everything the client does in a frame (time, snapshot use, usercmds, the cgame draw, the 2D) happens in the right context. One scene per frame, as the renderer needs.
 static void (*client_frame_original)(void);
+static unsigned make_cmd_calls[3]; // QA (padlog): calls of the usercmd maker per context
 static void client_frame_hook(void)
 {
 	static unsigned frame;
@@ -3197,6 +3198,16 @@ static void client_frame_hook(void)
 			}
 		}
 		pad_frame_player(1, 1);
+		if (CFG_ONCE("padlog", 0)) {
+			static unsigned frames1;
+			static DWORD at1;
+			frames1++;
+			if (GetTickCount() - at1 >= 1000) {
+				at1 = GetTickCount();
+				log_printf("native: padlog ctx1 frames %u | make_cmd calls ctx0 %u ctx1 %u other %u | pad p2: dev %d active %d forward %d right %d", frames1, make_cmd_calls[0], make_cmd_calls[1], make_cmd_calls[2], pad_dev[1], pads[1].active,
+					   pads[1].forward, pads[1].right);
+			}
+		}
 		if (split_on)
 			video_push();
 		client_frame_original();
@@ -3330,12 +3341,23 @@ static uint8_t *make_cmd_original(uint8_t *out, int lc);
 static volatile int qa_c0_fwd, qa_c0_fire; // QA (console mw2coop_qa_move <forward 0|1> <fire 0|1>): player 0's movement and trigger set straight in his usercmds
 static uint8_t *make_cmd_hook(uint8_t *out, int a)
 {
+	make_cmd_calls[ctx_current >= 0 && ctx_current < 2 ? ctx_current : 2]++;
 	uint8_t *cmd = make_cmd_original(out, a);
 	if (ctx_current == 0 && cmd && (qa_c0_fwd || qa_c0_fire)) {
 		if (qa_c0_fwd)
 			cmd[0x1a] = 127;
 		if (qa_c0_fire)
 			*(int *)(cmd + 4) |= 1;
+	}
+	if (CFG_ONCE("padlog", 0) && cmd && native_active) { // QA: once a second, per context, what the usercmd maker saw: the context, its local client argument, the pad state of the player
+		static DWORD at[3];
+		int k = ctx_current >= 0 && ctx_current < 3 ? ctx_current : 2;
+		if (GetTickCount() - at[k] >= 1000) {
+			at[k] = GetTickCount();
+			const pad_player_t *q = &pads[ctx_current == 1 ? 1 : 0];
+			log_printf("native: padlog make_cmd ctx %d lc %d | pad_dev %d active %d forward %d right %d kb_player %d qa_ctx1_buttons %d | cmd fwd %d right %d", ctx_current, a, pad_dev[ctx_current == 1 ? 1 : 0], q->active, q->forward, q->right, kb_player(),
+				   (int)qa_ctx1_buttons, (int)(int8_t)cmd[0x1a], (int)(int8_t)cmd[0x1b]);
+		}
 	}
 	if ((ctx_current == 0 || ctx_current == 1) && cmd && native_active) {
 		int pl = ctx_current;
