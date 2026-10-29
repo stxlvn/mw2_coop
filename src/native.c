@@ -45,6 +45,7 @@ static const uint8_t begin_frame_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 
 #define RVA_CG_TIME XR(0x374c20)
 static const uint8_t cg_draw_bytes[] = {0x83, 0xec, 0x0c, 0x53, 0x55};
 #endif
+#define RVA_CG_PS_ORIGIN (RVA_CG_TIME + 0x28) // the origin in cg.ps (the camera of the live context): 0x1c into the playerState, which starts 0xc after cg.time, in both builds
 static void (*cg_draw_original)(unsigned, int, int);
 static void (*begin_frame_original)(void);
 static uint8_t *base;
@@ -767,7 +768,22 @@ static void skip_rotation(IDirect3DDevice9 *dev)
 // the two contexts' client frames, the gap between the engine's frames, and the compositor (render thread)
 static LARGE_INTEGER perf_freq;
 static volatile LONGLONG perf_wait, perf_copy, perf_ctx[2], perf_comp, perf_gap_sum, perf_step, perf_aim, perf_sync;
-static volatile LONG perf_swaps, perf_ctx_n[2], perf_comp_n, perf_gap_n;
+static volatile LONG perf_swaps, perf_ctx_n[2], perf_comp_n, perf_gap_n, perf_gap_long;
+static LONGLONG perf_gap_max;
+// smoothness ([native] perflog=1): how even the frames are. Buckets in ms: <2, <4, <6, <8, <12, <16, <24, <33, <50, more
+#define PERF_BUCKETS 10
+static volatile LONG perf_gap_hist[PERF_BUCKETS], perf_present_hist[PERF_BUCKETS];
+static volatile LONG perf_td_n[2], perf_td_big[2];
+static volatile LONGLONG perf_td_sum[2], perf_td_sq[2];
+static volatile int perf_td_min[2] = {1 << 30, 1 << 30}, perf_td_max[2];
+static int perf_bucket(double ms)
+{
+	static const double edge[PERF_BUCKETS - 1] = {2, 4, 6, 8, 12, 16, 24, 33, 50};
+	for (int i = 0; i < PERF_BUCKETS - 1; i++)
+		if (ms < edge[i])
+			return i;
+	return PERF_BUCKETS - 1;
+}
 static LONGLONG perf_now(void)
 {
 	LARGE_INTEGER c;
@@ -789,19 +805,53 @@ static void perf_report(void)
 	log_printf("native: perf per second: engine frames %.0f (gap %.2f ms), ctx0 frames %ld (%.2f ms each), ctx1 frames %ld (%.2f ms each), swaps %ld (waits %.1f ms, copies %.1f ms, per second in total), compositor %ld frames (%.2f ms each)",
 		   ng / sec, ng ? (double)perf_gap_sum * ms / ng : 0.0, n0, n0 ? (double)perf_ctx[0] * ms / n0 : 0.0, n1, n1 ? (double)perf_ctx[1] * ms / n1 : 0.0, sw,
 		   (double)perf_wait * ms / sec, (double)perf_copy * ms / sec, nc, nc ? (double)perf_comp * ms / nc : 0.0);
-	log_printf("native: perf per second, inside the client frames (ms per second in total): server steps %.1f, aim targets %.1f, body sync %.1f", (double)perf_step * ms / sec,
-		   (double)perf_aim * ms / sec, (double)perf_sync * ms / sec);
+	{
+		char line[400];
+		int n = snprintf(line, sizeof(line), "native: perf smoothness: engine frame gaps <2/4/6/8/12/16/24/33/50/more ms:");
+		for (int i = 0; i < PERF_BUCKETS; i++)
+			n += snprintf(line + n, sizeof(line) - n, " %ld", (long)perf_gap_hist[i]), perf_gap_hist[i] = 0;
+		n += snprintf(line + n, sizeof(line) - n, " | shown frames:");
+		for (int i = 0; i < PERF_BUCKETS; i++)
+			n += snprintf(line + n, sizeof(line) - n, " %ld", (long)perf_present_hist[i]), perf_present_hist[i] = 0;
+		log_printf("%s", line);
+		for (int k = 0; k < 2; k++) {
+			LONG cnt = perf_td_n[k];
+			double mean = cnt ? (double)perf_td_sum[k] / cnt : 0, var = cnt ? (double)perf_td_sq[k] / cnt - mean * mean : 0;
+			log_printf("native: perf smoothness: view %d game time step per draw: mean %.2f ms, sd %.2f, min %d, max %d, steps over 12 ms %ld (of %ld)", k, mean, var > 0 ? sqrt(var) : 0.0,
+				   cnt ? perf_td_min[k] : 0, perf_td_max[k], (long)perf_td_big[k], (long)cnt);
+			perf_td_n[k] = perf_td_big[k] = 0;
+			perf_td_sum[k] = perf_td_sq[k] = 0;
+			perf_td_min[k] = 1 << 30, perf_td_max[k] = 0;
+		}
+	}
+	log_printf("native: perf per second, inside the client frames (ms per second in total): server steps %.1f, aim targets %.1f, body sync %.1f; longest frame %.1f ms, "
+		   "frames over 50 ms %ld", (double)perf_step * ms / sec, (double)perf_aim * ms / sec, (double)perf_sync * ms / sec, (double)perf_gap_max * ms, perf_gap_long);
+	perf_gap_max = 0;
+	perf_gap_long = 0;
 	perf_step = perf_aim = perf_sync = 0;
 	perf_wait = perf_copy = perf_ctx[0] = perf_ctx[1] = perf_comp = perf_gap_sum = 0;
 	perf_swaps = perf_ctx_n[0] = perf_ctx_n[1] = perf_comp_n = perf_gap_n = 0;
 	last = now;
 }
 
+// [native] pairpresent=1 (default): the picture is shown after the frame of the second view only. Each engine frame draws one view (the first one's, then the second's); showing both would
+// give each view half of the display's rate (the first view's picture is only half new), and with the display's synchronisation on (the engine waits for the refresh in every present)
+// 30 pictures a second per view on a 60 Hz screen. Both halves are composed in every frame anyway, so the picture after the second view's frame is whole and new in both.
+static volatile int skip_this_present;
 static void before_present_inner(int via, IDirect3DDevice9 *dev)
 {
 	trace_present();
 	InterlockedIncrement(&present_hits[via]);
 	render_tid = GetCurrentThreadId();
+	if (CFG_ONCE("perflog", 0)) { // how evenly the pictures are shown: the time between two presents
+		static LONGLONG prev;
+		LARGE_INTEGER c, f;
+		QueryPerformanceCounter(&c);
+		QueryPerformanceFrequency(&f);
+		if (prev)
+			perf_present_hist[perf_bucket((double)(c.QuadPart - prev) * 1000.0 / (double)f.QuadPart)]++;
+		prev = c.QuadPart;
+	}
 	{
 		static DWORD last_log;
 		DWORD now = GetTickCount();
@@ -851,13 +901,19 @@ static void before_present_inner(int via, IDirect3DDevice9 *dev)
 	}
 	compose(dev, half);
 	skip_rotation(dev);
+	{
+		static int pair = -1;
+		if (pair < 0)
+			pair = cfg("pairpresent", 1);
+		skip_this_present = pair && half == 0 && mode == 10 && comp_have[0] && comp_have[1] ? 1 : 0;
+	}
 	static LONG seq_at = -1;
 	if (seq_at < 0)
-		seq_at = cfg("seqat", 3000);
+		seq_at = cfg("seqat", -1); // (QA: tools/qa_native.sh sets 3000; off for players: twelve 8 MB pictures per session)
 	static LONG seq_step = -1;
 	if (seq_step < 0)
 		seq_step = cfg("seqstep", 1);
-	if (pops >= seq_at && (pops - seq_at) % seq_step == 0 && (pops - seq_at) / seq_step < 12) { // the composed picture about once a second (QA of the experiment: "seq-<pops>.bmp")
+	if (seq_at >= 0 && pops >= seq_at && (pops - seq_at) % seq_step == 0 && (pops - seq_at) / seq_step < 12) { // the composed picture about once a second (QA of the experiment: "seq-<pops>.bmp")
 		char name[32];
 		snprintf(name, sizeof(name), "seq-%ld", (long)pops);
 		shot_save_now(dev, name);
@@ -896,6 +952,7 @@ static void before_present_inner(int via, IDirect3DDevice9 *dev)
 
 static void before_present(int via, IDirect3DDevice9 *dev)
 {
+	skip_this_present = 0;
 	static int on = -1;
 	if (on < 0)
 		on = cfg("perflog", 0);
@@ -910,18 +967,24 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 static HRESULT STDMETHODCALLTYPE present_hook(IDirect3DDevice9 *dev, const RECT *a, const RECT *b, HWND c, const RGNDATA *d)
 {
 	before_present(0, dev);
+	if (skip_this_present)
+		return D3D_OK;
 	return present_orig(dev, a, b, c, d);
 }
 
 static HRESULT STDMETHODCALLTYPE present_ex_hook(IDirect3DDevice9 *dev, const RECT *a, const RECT *b, HWND c, const RGNDATA *d, DWORD e)
 {
 	before_present(1, dev);
+	if (skip_this_present)
+		return D3D_OK;
 	return present_ex_orig(dev, a, b, c, d, e);
 }
 
 static HRESULT STDMETHODCALLTYPE sc_present_hook(IDirect3DSwapChain9 *sc, const RECT *a, const RECT *b, HWND c, const RGNDATA *d, DWORD e)
 {
 	before_present(2, the_device);
+	if (skip_this_present)
+		return D3D_OK;
 	return sc_present_orig(sc, a, b, c, d, e);
 }
 
@@ -1616,7 +1679,69 @@ static void p0dump_diff(const char *what, const uint8_t *a, const uint8_t *b, in
 	log_printf("native: p0dump %s %d dwords differ:%s", what, cnt, buf);
 }
 static float p0cnt_draw_org[3], p0cnt_draw_org_b[3]; // the two origins the last two adds of entity 0 were given (5th argument and the pose at rdx) // [native] p0cnt=1: context 1's draws, and the adds of entity 0's DObj to its scene, per second
+static void cg_draw_hook_inner(unsigned local_client, int a, int b);
+// [native] smoothlog=1: how evenly the camera of each view moves from one draw to the next while it walks (the draws in a row that did not move although it did, the speed per draw)
+static void smooth_sample(int k)
+{
+	static float last[2][3];
+	static LONGLONG last_t[2];
+	static struct {
+		long n, still, moving;
+		double sum, sq;
+		float max;
+	} st[2];
+	static LONGLONG report;
+	LARGE_INTEGER c, f;
+	QueryPerformanceCounter(&c);
+	QueryPerformanceFrequency(&f);
+	const float *o = (const float *)(base + RVA_CG_PS_ORIGIN);
+	if (last_t[k]) {
+		float dx = o[0] - last[k][0], dy = o[1] - last[k][1], dz = o[2] - last[k][2];
+		float d = sqrtf(dx * dx + dy * dy + dz * dz);
+		double ms = (double)(c.QuadPart - last_t[k]) * 1000.0 / (double)f.QuadPart;
+		if (CFG_ONCE("smoothlog", 0) >= 2 && d > 0.05f && d < 100.0f) { // raw samples of a walking camera: the step, the wall time since the view's last draw, the game time step
+			static int dumped;
+			static int last_cgt[2];
+			int cgt = *(const int *)(base + RVA_CG_TIME);
+			if (dumped < 300)
+				dumped++, log_printf("native: smooth raw view %d: step %.3f units in %.2f wall ms, game time step %d ms (%.3f units/ms of game time)", k, d, ms, cgt - last_cgt[k],
+						     cgt > last_cgt[k] ? d / (cgt - last_cgt[k]) : 0.0f);
+			last_cgt[k] = cgt;
+		}
+		if (d < 100.0f) {
+			st[k].n++;
+			if (d > 0.0005f) {
+				double v = d / ms; // units per ms
+				st[k].moving++, st[k].sum += v, st[k].sq += v * v;
+				if ((float)v > st[k].max)
+					st[k].max = (float)v;
+			} else {
+				st[k].still++;
+			}
+		}
+	}
+	memcpy(last[k], o, sizeof(last[k]));
+	last_t[k] = c.QuadPart;
+	if (!report)
+		report = c.QuadPart;
+	if (c.QuadPart - report >= f.QuadPart) {
+		report = c.QuadPart;
+		for (int i = 0; i < 2; i++) {
+			double mean = st[i].moving ? st[i].sum / st[i].moving : 0, var = st[i].moving ? st[i].sq / st[i].moving - mean * mean : 0;
+			if (st[i].n)
+				log_printf("native: smooth view %d: %ld draws, %ld without camera movement, camera speed per draw mean %.4f sd %.4f max %.4f units/ms", i, st[i].n, st[i].still, mean,
+					   var > 0 ? sqrt(var) : 0.0, (double)st[i].max);
+			memset(&st[i], 0, sizeof(st[i]));
+		}
+	}
+}
 static void cg_draw_hook(unsigned local_client, int a, int b)
+{
+	cg_draw_hook_inner(local_client, a, b);
+	if (CFG_ONCE("smoothlog", 0))
+		smooth_sample(ctx_current == 1 ? 1 : 0);
+}
+static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 {
 	cg_draw_count++;
 	float *sw = subwindow();
@@ -1786,6 +1911,21 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 			cg_draw_original(mode == 3 && bottom ? 1u : local_client, a, b); // mode 3: the odd frames run the cgame for LOCAL CLIENT 1
 		}
 		half_note(*(int *)(base + RVA_CG_TIME), bottom);
+		if (CFG_ONCE("perflog", 0)) { // the step of the game time between two draws of the same view
+			static int last_t[2];
+			int t = *(int *)(base + RVA_CG_TIME), k = bottom ? 1 : 0;
+			if (last_t[k] && t >= last_t[k]) {
+				int d = t - last_t[k];
+				perf_td_n[k]++, perf_td_sum[k] += d, perf_td_sq[k] += (LONGLONG)d * d;
+				if (d < perf_td_min[k])
+					perf_td_min[k] = d;
+				if (d > perf_td_max[k])
+					perf_td_max[k] = d;
+				if (d > 12)
+					perf_td_big[k]++;
+			}
+			last_t[k] = t;
+		}
 		memcpy(sw, saved, sizeof(saved));
 		if (ctx_on)
 			ctx_after_draw();
@@ -2115,7 +2255,7 @@ static void run_both(void (*fn)(void))
 // stopped for a moment and its instruction pointer and the code addresses on its stack are logged (module+offset), once per hang. The threads run again before anything is logged.
 static volatile LONG hang_frames; // frames that reached the draw hooks (draw_hook)
 static volatile DWORD hang_init_tick;
-static void hang_dump(const char *why)
+static void hang_dump_thread(const char *why, DWORD only) // only: one thread's id, 0: every thread but this one
 {
 	DWORD self = GetCurrentThreadId(), pid = GetCurrentProcessId();
 	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -2126,7 +2266,7 @@ static void hang_dump(const char *why)
 	THREADENTRY32 te;
 	te.dwSize = sizeof(te);
 	for (BOOL ok = Thread32First(snap, &te); ok && nl < 24; ok = Thread32Next(snap, &te)) {
-		if (te.th32OwnerProcessID != pid || te.th32ThreadID == self)
+		if (te.th32OwnerProcessID != pid || te.th32ThreadID == self || (only && te.th32ThreadID != only))
 			continue;
 		HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
 		if (!th)
@@ -2169,6 +2309,40 @@ static void hang_dump(const char *why)
 	for (int i = 0; i < nl; i++)
 		log_printf("%s", lines[i]);
 }
+static void hang_dump(const char *why)
+{
+	hang_dump_thread(why, 0);
+}
+// Stall watch (QA, [native] stallwatch=<ms>, off by default): when the thread of the client frames has not started a frame for that long, its stack is logged in the middle of
+// the stall (and once more at three times as long): where the engine spends a hitch. At most 80 per session.
+static volatile DWORD stall_tid;
+static volatile LONGLONG stall_frame_t;
+static DWORD WINAPI stall_watch_thread(LPVOID p)
+{
+	const LONGLONG limit = (LONGLONG)(intptr_t)p;
+	LARGE_INTEGER f;
+	QueryPerformanceFrequency(&f);
+	LONGLONG seen = 0;
+	int stage = 0, dumps = 0;
+	for (;;) {
+		Sleep(4);
+		LONGLONG t = stall_frame_t;
+		if (!t || !stall_tid || dumps >= 80)
+			continue;
+		if (t != seen)
+			seen = t, stage = 0;
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		LONGLONG since = (now.QuadPart - t) * 1000 / f.QuadPart;
+		if ((stage == 0 && since > limit) || (stage == 1 && since > 3 * limit)) {
+			char why[48];
+			snprintf(why, sizeof(why), "stall %lld ms", since);
+			hang_dump_thread(why, stall_tid);
+			stage++, dumps++;
+		}
+	}
+	return 0;
+}
 static DWORD WINAPI hang_watch_thread(LPVOID unused)
 {
 	(void)unused;
@@ -2201,6 +2375,12 @@ static void cg_init_all_hook(void)
 		if (!started && cfg("hangwatch", 1)) {
 			started = 1;
 			CreateThread(NULL, 0, hang_watch_thread, NULL, 0, NULL);
+		}
+		static int stall_started;
+		int stall_ms = cfg("stallwatch", 0);
+		if (!stall_started && stall_ms > 0) {
+			stall_started = 1;
+			CreateThread(NULL, 0, stall_watch_thread, (LPVOID)(intptr_t)stall_ms, 0, NULL);
 		}
 		hang_frames = 0;
 		hang_init_tick = GetTickCount();
@@ -3343,6 +3523,7 @@ static void client_frame_hook(void)
 		return;
 	}
 	frame_bottom = 0;
+	stall_tid = GetCurrentThreadId(), stall_frame_t = perf_now(); // (the QA stall watch)
 	static LONGLONG perf_prev, perf_start;
 	static int perf_on = -1;
 	if (perf_on < 0)
@@ -3350,8 +3531,22 @@ static void client_frame_hook(void)
 	if (perf_on) {
 		LONGLONG now = perf_now();
 		if (perf_prev) {
-			perf_gap_sum += now - perf_prev;
+			LONGLONG g = now - perf_prev;
+			perf_gap_sum += g;
 			perf_gap_n++;
+			if (perf_freq.QuadPart)
+				perf_gap_hist[perf_bucket((double)g * 1000.0 / (double)perf_freq.QuadPart)]++;
+			if (g > perf_gap_max)
+				perf_gap_max = g;
+			static LONGLONG c0, c1, cp, wt, st; // the counters at the frame before
+			if (perf_freq.QuadPart && g * 1000 > 50 * perf_freq.QuadPart) { // a hitch: what the last frame spent in the mod's parts (the rest is the engine's)
+				double ms = 1000.0 / (double)perf_freq.QuadPart;
+				perf_gap_long++;
+				log_printf("native: perf hitch: frame %.1f ms; since the frame before: ctx0 %.1f ms, ctx1 %.1f ms, swap copies %.1f ms, worker waits %.1f ms, server steps %.1f ms",
+					   (double)g * ms, (double)(perf_ctx[0] - c0) * ms, (double)(perf_ctx[1] - c1) * ms, (double)(perf_copy - cp) * ms, (double)(perf_wait - wt) * ms,
+					   (double)(perf_step - st) * ms);
+			}
+			c0 = perf_ctx[0], c1 = perf_ctx[1], cp = perf_copy, wt = perf_wait, st = perf_step;
 		}
 		perf_prev = perf_start = now;
 		perf_report();
@@ -5492,6 +5687,12 @@ void native_install(void)
 	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 		log_printf("native: dobj add bytes differ (treelog in the plain game)");
 #endif
+	if (cfg("smoothlog", 0) && cfg("players", 0) < 2 && cfg("experiment", 0) < 2) { // plain game, for comparison: only the hooks, no session
+		mode = 0;
+		hooks_apply();
+		log_printf("native: smoothlog in the plain game");
+		return;
+	}
 	// the QA runs: settings.ini [native] players=2 starts the session at once (the menu's button does it later, native_split_start)
 	int players = cfg("players", 0);
 	if (players >= 2)

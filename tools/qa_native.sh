@@ -31,6 +31,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 		echo "p1cmd=1"
 		echo "listplayers=1"
 	fi
+	echo "seqat=3000" # twelve composed frames from composed frame 3000 on (the newest becomes local/scratch/native-last.png); off in the game itself
 	[ -n "$EXTRA" ] && echo "$EXTRA" | tr ';' '\n'
 } > "$A/mw2coop/settings.ini"
 {

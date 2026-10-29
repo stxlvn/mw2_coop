@@ -29,6 +29,7 @@
 #include "transplant.h"
 #include "memdump.h"
 #include "menus.h"
+#include "native.h"
 #include "net.h"
 #include "party.h"
 #include "progress.h"
@@ -87,12 +88,13 @@ static const char *watch_value(const char *name, char *buf, int size)
 
 // Script channel (content/scripts/maps/_mw2coop.gsc): the level scripts run on both machines
 // and set these dvars identically. mw2coop_state and mw2coop_qa_log are logged on both;
-// requests in mw2coop_cmd ("<what> @<time>") are carried out by the host only.
+// requests in mw2coop_cmd ("<what> @<time>") are carried out by the host only. In a split screen session the one process is the server: the lobby's party
+// is let go when the session starts, so its host flag is 0, and restarts, checkpoints and progress were dropped (a friendly killed: the mission never restarted).
 static char last_state[256], last_qa[256], last_cmd[256], last_shot[96];
 
 static void script_request(const char *cmd)
 {
-	int host = (int)game_peek(RVA_PARTY_IS_HOST, 1);
+	int host = (int)game_peek(RVA_PARTY_IS_HOST, 1) || native_split_active();
 	log_printf("script: request '%s' (%s)", cmd, host ? "host, acting" : "client, host acts");
 	if (strncmp(cmd, "nextmap ", 8) == 0) {
 		char map[64] = "";
