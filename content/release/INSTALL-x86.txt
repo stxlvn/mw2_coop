@@ -1,49 +1,41 @@
-mw2coop {VERSION} (32-bit game and iw4x-sp client, experimental): campaign co-op for Call of Duty: Modern Warfare 2 (2009), two players
+mw2coop {VERSION} (32-bit game, experimental): campaign co-op for Call of Duty: Modern Warfare 2 (2009), two players
 https://github.com/stxlvn/mw2_coop
 
 === По-русски ===
 
-Это ЭКСПЕРИМЕНТАЛЬНАЯ сборка для старой 32-битной версии MW2 (до сентябрьского обновления 2026, iw4sp.exe 32-бит) и
-для клиента iw4x-sp. Для актуальной 64-битной версии берите обычный архив mw2coop-<версия>.zip (без -x86).
-На любой другой сборке игры мод сам выключается и ничего не делает.
+Это ЭКСПЕРИМЕНТАЛЬНАЯ сборка для старой 32-битной версии MW2 из Steam (до сентябрьского обновления 2026, iw4sp.exe
+32-бит). Для актуальной 64-битной версии берите обычный архив mw2coop-<версия>.zip, для клиента iw4x-sp - архив
+mw2coop-<версия>-iw4x.zip. На любой другой сборке игры мод сам выключается и ничего не делает.
 
-Какой winmm.dll брать:
-- старая 32-битная игра из Steam: winmm.dll из корня этого архива;
-- клиент iw4x-sp (iw4x-sp.exe рядом с iw4sp.exe версии 1.0.159): winmm.dll из папки iw4x-sp этого архива.
-
-Установка (у обоих игроков): в папку игры (рядом с iw4sp.exe) положите нужный winmm.dll и папку mw2coop из этого
-архива. Ничего из игры не заменяется. Остальное (лобби, вход, сохранения, брандмауэр, разделённый экран) как в
-обычном архиве: см. INSTALL.txt в нём и README на GitHub. У обоих игроков должны быть ОДИНАКОВЫЕ файлы мода.
+Установка (у обоих игроков): в папку игры (рядом с iw4sp.exe) положите winmm.dll и папку mw2coop из этого архива.
+Ничего из игры не заменяется. Остальное (лобби, вход, сохранения, брандмауэр, разделённый экран) как в обычном
+архиве: см. INSTALL.txt в нём и README на GitHub. У обоих игроков должны быть ОДИНАКОВЫЕ файлы мода.
 Удаление: удалите winmm.dll и папку mw2coop.
 
 Что есть: сетевой кооператив, разделённый экран на одном ПК (Кампания -> РАЗДЕЛЕНИЕ ЭКРАНА) со всем, что есть в
 64-битной версии (лобби с выбором устройства, геймпады, помощь в прицеливании, вибрация, настройки геймпада),
 ретрансляция Steam.
-Проверено ботами: сетевой кооператив двух копий на одном ПК (в iw4x-sp — пара на тренировке), пара "хост 64-бит +
-клиент 32-бит" на тренировке, разделённый экран на тренировке и в "Скалолазе". Не проверено: игра через интернет
-между двумя ПК на этих сборках, кампания целиком, настоящие геймпады.
+Проверено ботами: сетевой кооператив двух копий на одном ПК, пара "хост 64-бит + клиент 32-бит" на тренировке,
+разделённый экран на тренировке и в "Скалолазе". Не проверено: игра через интернет между двумя ПК на этой сборке,
+кампания целиком, настоящие геймпады.
 Проблемы: приложите mw2coop\mw2coop.log обоих игроков.
 
 === English ===
 
-This is an EXPERIMENTAL build for the older 32-bit Modern Warfare 2 (before the September 2026 update, 32-bit
-iw4sp.exe) and for the iw4x-sp client. For the current 64-bit game use the normal archive mw2coop-<version>.zip
-(without -x86). On any other build of the game the mod switches itself off.
+This is an EXPERIMENTAL build for the older 32-bit Modern Warfare 2 on Steam (before the September 2026 update, 32-bit
+iw4sp.exe). For the current 64-bit game use the normal archive mw2coop-<version>.zip, for the iw4x-sp client the
+archive mw2coop-<version>-iw4x.zip. On any other build of the game the mod switches itself off.
 
-Which winmm.dll:
-- the older 32-bit game from Steam: winmm.dll from the root of this archive;
-- the iw4x-sp client (iw4x-sp.exe next to the 1.0.159 iw4sp.exe): winmm.dll from the iw4x-sp folder of this archive.
-
-Install (both players): the game folder (next to iw4sp.exe) <- the right winmm.dll and the mw2coop folder from this
-archive. Nothing of the game is replaced. The rest (lobby, joining, saves, firewall, split screen) works as in the
-normal archive: see its INSTALL.txt and the README on GitHub. Both players need the SAME mod files.
+Install (both players): the game folder (next to iw4sp.exe) <- winmm.dll and the mw2coop folder from this archive.
+Nothing of the game is replaced. The rest (lobby, joining, saves, firewall, split screen) works as in the normal
+archive: see its INSTALL.txt and the README on GitHub. Both players need the SAME mod files.
 Uninstall: delete winmm.dll and the mw2coop folder.
 
 What it has: online co-op, the split screen on one PC (Campaign -> SPLIT SCREEN) with everything of the 64-bit build
 (lobby with the device choice, gamepads, aim assist, vibration, gamepad options), the Steam relay.
-Checked with bots: online co-op of two copies on one PC (iw4x-sp: a pair on the Trainer), a 64-bit host with a 32-bit
-client on the Trainer, the split screen on the Trainer and Cliffhanger. Not checked: playing over the internet between
-two PCs on these builds, the whole campaign, real gamepads.
+Checked with bots: online co-op of two copies on one PC, a 64-bit host with a 32-bit client on the Trainer, the split
+screen on the Trainer and Cliffhanger. Not checked: playing over the internet between two PCs on this build, the whole
+campaign, real gamepads.
 Problems: attach mw2coop\mw2coop.log from both players.
 
 Not affiliated with or endorsed by Activision or Infinity Ward. mw2coop's own code is MIT licensed (LICENSE.txt).

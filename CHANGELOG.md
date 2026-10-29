@@ -26,14 +26,14 @@ left (a new objective) in the top half, the subtitles and the mission title line
   and walking where he walks, with his name over it; each half has its own effects (the muzzle flash and smoke of one
   player no longer fill the other's half with a white haze); no dark square around the compass; far NPCs no longer
   jump in the bottom half; no "waiting for the other player" text while a level loads.
-- **Builds:** the 64-bit game, and, experimental, the older 32-bit game and the iw4x-sp client (1.0.159 `iw4sp.exe`),
-  both in the archive `-x86`.
+- **Builds:** the 64-bit game, and, experimental, the older 32-bit game (archive `-x86`) and the iw4x-sp client
+  (1.0.159 `iw4sp.exe`, archive `-iw4x`).
 
 How: the game's own two-player machinery runs with two client states swapped per frame; the scene's 2D is drawn into
 a layer per half and laid over the squeezed view; the game's 2D placement is made for a half. Details and the research:
 `docs/native-splitscreen-plan.md`. Settings under `[native]` in `settings.ini` are for testing (QA only).
 Known gaps: the gamepads were tested with simulated gamepads only; one sound listener, no second keyboard (the keyboard
-goes to one player); the 32-bit and iw4x-sp split screen was checked on the Trainer and Cliffhanger only.
+goes to one player); the 32-bit split screen was checked on the Trainer and Cliffhanger only, the iw4x-sp one on the Trainer only.
 
 ### Loading screen and briefing of the campaign co-op
 
@@ -61,12 +61,13 @@ intro text and subheadings, with smaller glyphs (SIL OFL, shipped in `mw2coop\fo
 metrics and of the atlas. Works in the 64-bit and the 32-bit build. `fonts=0` under `[display]` in `settings.ini` keeps
 the game's own font; the English game is never touched.
 
-### The 32-bit game and the iw4x-sp client (experimental archive `-x86`)
+### The 32-bit game and the iw4x-sp client (experimental archives `-x86` and `-iw4x`)
 
-The archive `mw2coop-v0.5.5-beta-x86.zip` carries the 32-bit build for the older MW2 and, in the folder `iw4x-sp`, the
-profile for the iw4x-sp client (its 1.0.159 `iw4sp.exe`). Both have the online co-op and, new, everything of the split
-screen above; the Steam relay, the screenshot helper and the script error call stacks are ported too. Checked with
-bots: online co-op on both (iw4x-sp: a pair on the Trainer), the split screen on the Trainer and Cliffhanger.
+`mw2coop-v0.5.5-beta-x86.zip` is the build for the older 32-bit MW2, `mw2coop-v0.5.5-beta-iw4x.zip` the one for the
+iw4x-sp client (its 1.0.159 `iw4sp.exe`). Both have the online co-op and, new, everything of the split screen above.
+The 32-bit build also has the Steam relay, the screenshot helper and the script error call stacks (in the iw4x-sp
+build the call stacks are off and the Steam relay is not checked). Checked with bots: online co-op on both (iw4x-sp:
+a pair on the Trainer), the split screen on the Trainer and Cliffhanger (iw4x-sp: the Trainer).
 
 ## v0.5.0-beta (2026-10-25)
 
