@@ -83,6 +83,35 @@ static uint8_t *base;
 #define RVA_CLIENT_INIT_B 0xb87b0
 #define RVA_COOP_DVAR 0x1905308
 #define MSG_T_SIZE 0x30
+#define RVA_CENT 0x441070 // cg_entities
+#define CENT_SIZE 0x1a8
+#define CENT_TYPE 0xe0
+#define CENT_FLAGS 0xec
+#define CENT_VALID 0x18c
+#define CF_YAW0 10 // float indices: yaw of the pose, of the current state, of the next state
+#define CF_YAW1 42
+#define CF_YAW2 73
+#define CF_ORG0 6 // origin of the pose, of the current state, of the next state
+#define CF_ORG1 32
+#define CF_ORG2 63
+#define P0_HDR 0x18 // the pose header a copy of the other player's entity keeps
+#define P0_REST 0x30 // the rest of the pose
+#define P0_REST_LEN 0x30
+#define P0_TREE 0x170 // the two dwords with the animation tree reference
+#define SLOT_END_PAST(q) ((q) > base + 0x545857)
+#define RVA_CG_ASPECT 0x43c640 // the cgame's aspect
+#define RVA_PIXEL_ASPECT 0x411373c // the pixel aspect of the 2D
+#define RVA_VIDEO_ASPECT 0x4113738
+#define RVA_WAIT_ALPHA_SITE 0x94039
+#define RVA_ENT_FLAGS 0x52c300 // the bit set of entities the snapshot transition flagged for the cleanup
+#define RVA_CLIENT_DOBJ 0x1fece0 // DObj *(int entity): the client's DObj table
+#define RVA_SERVER_DOBJ 0x1fee30
+#define RVA_ENT_INFO 0x234520 // the server's entity info of an entity
+#define RVA_SDOBJ_INFO 0x2968e0 // the first field of a DObj (the tree)
+#define RVA_DOBJ_CLRBIT 0x1fefa0
+#define DOBJ_NUMMODELS 0xd
+#define DOBJ_MODELS 0xa8
+#define P0GENERAL_RET(r) ((r) >= base + 0x9ea20 && (r) < base + 0x9ea20 + 1102)
 #else
 // the 32-bit official build: docs/32bit-native-map/clientctx.md
 #define RVA_LOCAL_PLAYERS_STORE 0xbf9db
@@ -113,6 +142,36 @@ static uint8_t *base;
 #define RVA_CLIENT_INIT_B 0x956e0
 #define RVA_COOP_DVAR 0x167f0ec
 #define MSG_T_SIZE 0x28
+#define RVA_CENT 0x392848
+#define CENT_SIZE 0x198
+#define CENT_TYPE 0xd4
+#define CENT_FLAGS 0xe0
+#define CENT_VALID 0x180
+#define CF_YAW0 9
+#define CF_YAW1 39
+#define CF_YAW2 70
+#define CF_ORG0 5
+#define CF_ORG1 29
+#define CF_ORG2 60
+#define P0_HDR 0x14
+#define P0_REST 0x2c
+#define P0_REST_LEN 0x2c
+#define P0_TREE 0x164
+#define SLOT_END_PAST(q) ((q) >= base + 0x4941e0)
+#define RVA_CG_ASPECT 0x35f018
+#define RVA_PIXEL_ASPECT 0x108edb8
+#define RVA_VIDEO_ASPECT 0x108edb4
+#define RVA_WAIT_ALPHA_SITE 0x15ef17
+#define RVA_ENT_FLAGS 0x46b280
+#define RVA_CLIENT_DOBJ 0xf3c70
+#define RVA_SERVER_DOBJ 0x95740
+#define RVA_ENT_INFO 0xdd30
+#define RVA_SDOBJ_INFO 0x3f4e0
+#define RVA_DOBJ_CLRBIT 0x10f50
+#define DOBJ_NUMMODELS 9
+#define DOBJ_MODELS 0x98
+// the add-by-type cases that add the "general" entity types: 0x561d00 (case 0), 0x561d60 (case 2), 0x5621d0 (case 5)
+#define P0GENERAL_RET(r) (((r) >= base + 0x161d00 && (r) < base + 0x161d5a) || ((r) >= base + 0x161d60 && (r) < base + 0x161e17) || ((r) >= base + 0x1621d0 && (r) < base + 0x162294))
 #endif
 static char settings_path[MAX_PATH];
 static int mode;
@@ -175,7 +234,7 @@ static void jhook_jump(uint8_t *target, size_t len, const void *replacement, uin
 }
 
 // The settings of the split screen: settings.ini [native] for the QA runs; a session started from the menu uses the values the feature ships with (from_menu) unless the file says otherwise
-static int native_active;
+int native_active; // (read by the asm stub of the 32-bit view model hook)
 static int from_menu;
 static int menu_pad = -1, menu_pad0 = -1; // the lobby's devices of player 2 and player 1 (-1: the keyboard and mouse)
 static int cfg(const char *key, int def)
@@ -1304,7 +1363,20 @@ static void trace_present(void)
 
 // Mode 10: the scene function's last pass (rva 0x63680, called at 0x5c5bf: the 2D texts and signs) draws into the half's layer instead of the picture, so the picture keeps the view alone
 // (the glow and blur that follow work on it) and the 2D, laid out by the client for a half-height screen, stays whole.
+#ifdef _WIN64
 static void (*scene2d_original)(void *);
+#else
+// 32 bits: the scene's 2D pass and the frame's 2D command list take the scene in ESI
+static void *scene2d_target, *final2d_target;
+static void scene2d_original(void *vp)
+{
+	__asm__ volatile("call *%1" : "+S"(vp) : "r"(scene2d_target) : "eax", "ecx", "edx", "memory", "cc");
+}
+static void final2d_original(void *vp)
+{
+	__asm__ volatile("call *%1" : "+S"(vp) : "r"(final2d_target) : "eax", "ecx", "edx", "memory", "cc");
+}
+#endif
 static void scene2d_hook(void *vp)
 {
 	{ // diagnostics ([native] scenescan=1): which dwords of the scene struct look like the cgame's time (rva 0x422434), to find a per-frame identity the render thread can read
@@ -1361,7 +1433,9 @@ static void scene2d_hook(void *vp)
 
 // The second 2D source: the frame's 2D command list (function 0x5c010, called at rva 0x4545b after the glow and blur): global texts, fades, the intro's title lines. It goes into the same
 // layer (not cleared again).
+#ifdef _WIN64
 static void (*final2d_original)(void *);
+#endif
 static void final2d_hook(void *vp)
 {
 	IDirect3DDevice9 *dev = the_device;
@@ -1496,7 +1570,7 @@ static void scan_place(void)
 
 static int ctx_current; // defined with the context ranges below
 static unsigned p0cnt_draws, p0cnt_adds, p0cnt_flags1, p0cnt_flags0; // flags (4th argument) of the last add of entity 0 in context 1 / of entity 1 in context 0
-static uint8_t p0dump_slot[2][0x1a8], p0dump_dobj[2][0x200]; // [native] p0cnt=2: the entity slot and the DObj bytes of the other player as each context draws him (0: context 0's entity 1, 1: context 1's entity 0)
+static uint8_t p0dump_slot[2][CENT_SIZE], p0dump_dobj[2][0x200]; // [native] p0cnt=2: the entity slot and the DObj bytes of the other player as each context draws him (0: context 0's entity 1, 1: context 1's entity 0)
 static int p0dump_have[2];
 static void *p0ptr[6];
 static unsigned p0ptr_cnt[6], p0ptr_b8[6], p0ptr_bc[6]; // the distinct DObjs added as entity 0 in context 1 since the last p0cnt line, how often, and their dwords +0xb8 / +0xbc
@@ -1523,7 +1597,7 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 	// client times: cg.time (rva 0x422434), cg.frametime (0x422430), cg.frameInterpolation (0x42242c), cl.serverTime (0x51dca8) and the snapshot lerp fraction (0x51dcb0).
 	if (CFG_ONCE("p0cnt", 0) && ctx_on && ctx_current == 1) {
 		if (++p0cnt_draws >= 100) {
-			const float *e = (const float *)(base + 0x441070);
+			const float *e = (const float *)(base + RVA_CENT);
 			log_printf("native: p0cnt ctx1 draws %u adds of entity 0 %u | slot0 pos %.1f %.1f %.1f | cg.ps (p2) %.1f %.1f | last add: arg5 %.1f %.1f %.1f pose %.1f %.1f %.1f | flags ctx1 ent0 %08x ctx0 ent1 %08x", p0cnt_draws, p0cnt_adds, (double)e[63], (double)e[64], (double)e[65],
 				   (double)*(const float *)(base + 0x42245c), (double)*(const float *)(base + 0x422460), (double)p0cnt_draw_org[0], (double)p0cnt_draw_org[1], (double)p0cnt_draw_org[2],
 				   (double)p0cnt_draw_org_b[0], (double)p0cnt_draw_org_b[1], (double)p0cnt_draw_org_b[2], p0cnt_flags1, p0cnt_flags0);
@@ -1539,7 +1613,7 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 				memset(p0ptr_cnt, 0, sizeof(p0ptr_cnt));
 			}
 			if (CFG_ONCE("p0cnt", 0) >= 2 && p0dump_have[0] && p0dump_have[1]) {
-				static uint8_t prev_slot[0x1a8], prev_dobj[0x200];
+				static uint8_t prev_slot[CENT_SIZE], prev_dobj[0x200];
 				p0dump_diff("slot ctx1ent0/ctx0ent1", p0dump_slot[1], p0dump_slot[0], sizeof(p0dump_slot[0]));
 				p0dump_diff("dobj ctx1ent0/ctx0ent1", p0dump_dobj[1], p0dump_dobj[0], sizeof(p0dump_dobj[0]));
 				p0dump_diff("slot ctx1 since last", p0dump_slot[1], prev_slot, sizeof(prev_slot));
@@ -1551,7 +1625,7 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 	}
 	// View angle check ([native] viewlog=1, 2026-10-28: a script's SetPlayerAngles turns player 2's body but not his camera): per context, every 25th draw, the live context's
 	// playerState view angles (cg.ps rva 0x422440: pitch +0x108, yaw +0x10c, roll +0x110) and dwords +0x100..+0x120 (delta_angles are among them), the view angle accumulators
-	// (rva 0x533d14 pitch, 0x533d18 yaw) and the cl block's playerState copy (rva 0x535d38) yaw
+	// (rva 0x533d14 pitch, 0x533d18 yaw) and the cl block's playerState copy (rva RVA_CL_PS) yaw
 	if (CFG_ONCE("viewlog", 0) && ctx_on) {
 		static unsigned vn;
 		if (++vn % 25 == 0 && vn < 20000) {
@@ -1559,7 +1633,7 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 			const unsigned *d = (const unsigned *)(ps + 0x100);
 			log_printf("native: viewlog ctx %d cg.ps pitch %.1f yaw %.1f roll %.1f | acc pitch %.1f yaw %.1f | cl.ps yaw %.1f | ps+100: %08x %08x %08x %08x %08x %08x %08x %08x", ctx_current,
 				   (double)*(float *)(ps + 0x108), (double)*(float *)(ps + 0x10c), (double)*(float *)(ps + 0x110), (double)*(float *)(base + RVA_ACC_PITCH), (double)*(float *)(base + RVA_ACC_PITCH + 4),
-				   (double)*(float *)(base + 0x535d38 + 0x10c), d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+				   (double)*(float *)(base + RVA_CL_PS + 0x10c), d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
 		}
 	}
 	if (CFG_ONCE("timelog", 0) && ctx_on) {
@@ -1575,7 +1649,7 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 				// "as on ice": where player 2 is by his own context's playerState (cg.ps origin, rva 0x42245c, live in context 1) and where context 0's cgame has his entity (slot 1,
 				// interpolated origin floats 63..65); both on the same cg.time scale
 				const float *ps = (const float *)(base + 0x42245c);
-				const float *e1 = (const float *)(base + 0x441070 + 0x1a8);
+				const float *e1 = (const float *)(base + RVA_CENT + CENT_SIZE);
 				if (ctx_current == 1)
 					log_printf("native: timelog p2ps cg.time %d pos %.1f %.1f %.1f", *(int *)(base + 0x422434), (double)ps[0], (double)ps[1], (double)ps[2]);
 				else
@@ -1586,11 +1660,11 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 	}
 	if (!mode || !sw || second_pass || (mode >= 5 && !split_on)) {
 		if ((mode == 8 || mode == 10) && cg_aspect_have) { // back from the split: the cgame's aspect as it was
-			*(float *)(base + 0x43c640) = cg_aspect_saved;
+			*(float *)(base + RVA_CG_ASPECT) = cg_aspect_saved;
 			cg_aspect_have = 0;
 		}
 		if (mode == 7 && asp_have) { // back from the split: the video aspect as the game had it
-			memcpy(base + 0x4113738, asp_saved, sizeof(asp_saved));
+			memcpy(base + RVA_VIDEO_ASPECT, asp_saved, sizeof(asp_saved));
 			asp_have = 0;
 		}
 		cg_draw_original(local_client, a, b);
@@ -1608,22 +1682,22 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 			sw[2] = 0.25f, sw[3] = 0.75f;
 		if (mode == 9) // the views are recorded for a half-height screen: the whole viewport, in the top rows
 			sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
-		if (mode == 8 || mode == 10) { // the console's way: the whole view, built for the shape of a half with the cgame's own aspect (rva 0x43c640, read by CG_CalcFov), drawn over the full frame and squeezed into the half
+		if (mode == 8 || mode == 10) { // the console's way: the whole view, built for the shape of a half with the cgame's own aspect (rva RVA_CG_ASPECT, read by CG_CalcFov), drawn over the full frame and squeezed into the half
 			sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
 			if (comp_w && comp_h) {
-				float *aspect = (float *)(base + 0x43c640);
+				float *aspect = (float *)(base + RVA_CG_ASPECT);
 				if (!cg_aspect_have) {
 					cg_aspect_saved = *aspect;
 					cg_aspect_have = 1;
 				}
 				*aspect = (float)comp_w / ((float)comp_h * 0.5f);
 			}
-			{ // [native] pixelaspect=<f>: the pixel aspect the 2D is laid out with (rva 0x411373c); the squeeze of the frame into its half flattens text 2:1, a factor of 2 or 0.5 here
+			{ // [native] pixelaspect=<f>: the pixel aspect the 2D is laid out with (rva RVA_PIXEL_ASPECT); the squeeze of the frame into its half flattens text 2:1, a factor of 2 or 0.5 here
 			  // pre-stretches it. Kept while the picture is split.
 				static float want = -1;
 				static float saved;
 				static int have;
-				float *pa = (float *)(base + 0x411373c);
+				float *pa = (float *)(base + RVA_PIXEL_ASPECT);
 				if (want < 0) {
 					char v[32];
 					GetPrivateProfileStringA("native", "pixelaspect", "0", v, sizeof(v), settings_path);
@@ -1638,10 +1712,10 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 				}
 			}
 		}
-		if (mode == 7) { // the whole view, built for the shape of a half (wide), drawn over the full frame: the compositor squeezes it into the half (rva 0x4113738: aspect, 0x411373c: pixel aspect)
+		if (mode == 7) { // the whole view, built for the shape of a half (wide), drawn over the full frame: the compositor squeezes it into the half (rva RVA_VIDEO_ASPECT: aspect, RVA_PIXEL_ASPECT: pixel aspect)
 			sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
 			if (comp_w && comp_h) {
-				float *aspect = (float *)(base + 0x4113738);
+				float *aspect = (float *)(base + RVA_VIDEO_ASPECT);
 				if (!asp_have) {
 					memcpy(asp_saved, aspect, sizeof(asp_saved));
 					asp_have = 1;
@@ -2138,7 +2212,7 @@ static void ctx_jitter_log(void)
 	log_printf("%s", line);
 }
 
-// Diagnostics ([native] entlog=1): the entities of the live cgame near the camera (cg_entities at rva 0x441070, 0x1a8 bytes each: eType +0xe0, origin +0x18, clientNum +0x160)
+// Diagnostics ([native] entlog=1): the entities of the live cgame near the camera (cg_entities at rva RVA_CENT, CENT_SIZE bytes each: eType +0xe0, origin +0x18, clientNum +0x160)
 static void ctx_entity_log(void)
 {
 	static unsigned seen[2];
@@ -2167,11 +2241,11 @@ static void ctx_entity_log(void)
 	const float *cam = (const float *)(base + 0x42245c);
 	log_printf("native: ctx %d camera %.0f %.0f %.0f, clientNum %d", ctx_current, cam[0], cam[1], cam[2], *(int *)(base + 0x40caa0));
 	for (int i = 0; i < 1024; i++) {
-		const uint8_t *e = base + 0x441070 + (size_t)i * 0x1a8;
+		const uint8_t *e = base + RVA_CENT + (size_t)i * CENT_SIZE;
 		const float *o = (const float *)(e + 0x18);
 		float dx = o[0] - cam[0], dy = o[1] - cam[1], dz = o[2] - cam[2];
-		if (dx * dx + dy * dy + dz * dz < 200.0f * 200.0f && e[0xe0] != 0)
-			log_printf("native:   ent %d type %d flags %08x clientNum %d at %.0f %.0f %.0f", i, e[0xe0], *(unsigned *)(e + 0xec), *(unsigned short *)(e + 0x160), o[0], o[1], o[2]);
+		if (dx * dx + dy * dy + dz * dz < 200.0f * 200.0f && e[CENT_TYPE] != 0)
+			log_printf("native:   ent %d type %d flags %08x clientNum %d at %.0f %.0f %.0f", i, e[CENT_TYPE], *(unsigned *)(e + CENT_FLAGS), *(unsigned short *)(e + 0x160), o[0], o[1], o[2]);
 	}
 }
 
@@ -2244,7 +2318,7 @@ static void ctx_after_draw(void)
 	ctx_dump("after init");
 }
 
-// The server's copy of a local player's playerstate into the cl block (rva 0x535d38 is +0x2018 into the block at 0x533d20): for client 1 straight into context 1's copy, so no other thread
+// The server's copy of a local player's playerstate into the cl block (rva RVA_CL_PS is +0x2018 into the block at 0x533d20): for client 1 straight into context 1's copy, so no other thread
 // ever sees a swapped block for it.
 #define PS_SIZE 0xaca4
 static void ps_publish_hook(unsigned lc, const void *ps)
@@ -2470,25 +2544,28 @@ static void pad_menu(int pl, const xin_state_t *st)
 // whenever their client DObj and the server's do not carry the same models: 0xb86f0(server entity info 0x234520(n), 0x2968e0(server DObj)) ([native] bodysync=0 off).
 static const uint8_t *dobj_model_names(const uint8_t *dobj, const char *out[8], int *count)
 {
-	*count = dobj ? dobj[0xd] : 0;
-	const uint8_t *const *models = dobj ? *(const uint8_t *const **)(dobj + 0xa8) : NULL;
+	*count = dobj ? dobj[DOBJ_NUMMODELS] : 0;
+	const uint8_t *const *models = dobj ? *(const uint8_t *const **)(dobj + DOBJ_MODELS) : NULL;
 	for (int i = 0; i < 8; i++)
 		out[i] = NULL;
 	for (int i = 0; models && i < *count && i < 8; i++)
 		out[i] = models[i] && !IsBadReadPtr(models[i], 8) ? *(const char *const *)models[i] : NULL;
 	return dobj;
 }
+#ifdef _WIN64
+#define DOBJ_MAKE_DIRECT(info, sinfo) ((int)((int (*)(void *, void *))(base + 0xb86f0))(info, sinfo))
+#else
+static unsigned dobj_make_original(void *info, void *dobj_info); // (below) the 32-bit engine's make takes EDI and EBX
+#define DOBJ_MAKE_DIRECT(info, sinfo) ((int)dobj_make_original(info, sinfo))
+#endif
 static void body_dobj_sync(void)
 {
-#ifndef _WIN64
-	return; // 32 bits: the entity part of the port comes later (docs/32bit-native-map/entities.md)
-#endif
 	static DWORD at;
 	if (!native_active || ctx_current != 0 || !CFG_ONCE("bodysync", 1) || GetTickCount() - at < 200)
 		return;
 	at = GetTickCount();
-	const uint8_t *(*client_dobj)(int) = (const uint8_t *(*)(int))(base + 0x1fece0);
-	const uint8_t *(*server_dobj)(int) = (const uint8_t *(*)(int))(base + 0x1fee30);
+	const uint8_t *(*client_dobj)(int) = (const uint8_t *(*)(int))(base + RVA_CLIENT_DOBJ);
+	const uint8_t *(*server_dobj)(int) = (const uint8_t *(*)(int))(base + RVA_SERVER_DOBJ);
 	for (int n = 0; n < 2; n++) {
 		const uint8_t *cd = client_dobj(n), *sd = server_dobj(n);
 		if (!cd || !sd)
@@ -2502,12 +2579,12 @@ static void body_dobj_sync(void)
 			same = cn[i] && sn[i] && !strcmp(cn[i], sn[i]);
 		if (same)
 			continue;
-		void *info = ((void *(*)(int))(base + 0x234520))(n);
-		void *sinfo = ((void *(*)(const uint8_t *))(base + 0x2968e0))(sd);
-		int r = ((int (*)(void *, void *))(base + 0xb86f0))(info, sinfo);
+		void *info = ((void *(*)(int))(base + RVA_ENT_INFO))(n);
+		void *sinfo = ((void *(*)(const uint8_t *))(base + RVA_SDOBJ_INFO))(sd);
+		int r = DOBJ_MAKE_DIRECT(info, sinfo);
 		if (r && CFG_ONCE("bodysyncfree", 1)) { // what the transition does with a 1: the client DObj is dropped and the entity marked for the cleanup that follows
-			((void (*)(unsigned))(base + 0x1fefa0))((unsigned)n);
-			((uint32_t *)(base + 0x52c300))[n >> 5] |= 0x80000000u >> (n & 31);
+			((void (*)(unsigned))(base + RVA_DOBJ_CLRBIT))((unsigned)n);
+			((uint32_t *)(base + RVA_ENT_FLAGS))[n >> 5] |= 0x80000000u >> (n & 31);
 		}
 		if (CFG_ONCE("bodysynclog", 0))
 			log_printf("native: body DObj sync entity %d: client %d models (last %s), server %d models (last %s) -> %d", n, cc, cc && cn[cc - 1] ? cn[cc - 1] : "-", sc,
@@ -2559,14 +2636,24 @@ static void ik_hook(void *ent, void *dobj)
 // DObjs from a pool (rva 0x12c6d0: in-use flags at rva 0xf50ec0, the DObjs at 0xf50b40) and gives none when all are in use: such an actor is not drawn at all (Price on Contingency,
 // a different one in each run). Both contexts process every snapshot and the client DObjs are shared, so every actor made one twice, and the one the table lost stayed in use
 // for ever. [native] dobjonce=1 (default): context 1 makes none for an entity but player 1 (his own entity is in no snapshot of context 0).
+#ifdef _WIN64
 static unsigned (*dobj_make_original)(void *, void *);
+#else
+static void *dobj_make_target;
+static unsigned dobj_make_original(void *info, void *dobj_info)
+{
+	unsigned r;
+	__asm__ volatile("call *%1" : "=a"(r) : "r"(dobj_make_target), "D"(info), "b"(dobj_info) : "ecx", "edx", "memory", "cc");
+	return r;
+}
+#endif
 static const uint8_t dobj_make_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xfa, 0x48, 0x8b, 0xf1, 0x48, 0x85, 0xd2};
 static unsigned dobj_make_hook(void *info, void *dobj_info)
 {
 	if (native_active && ctx_current == 1 && info && CFG_ONCE("dobjonce", 1) && *(const uint16_t *)((const uint8_t *)info + 0x7e) != 0)
 		return 0;
 	int ent = info ? *(const uint16_t *)((const uint8_t *)info + 0x7e) : -1;
-	const uint8_t *(*client_dobj)(int) = (const uint8_t *(*)(int))(base + 0x1fece0);
+	const uint8_t *(*client_dobj)(int) = (const uint8_t *(*)(int))(base + RVA_CLIENT_DOBJ);
 	const uint8_t *before = ent >= 0 && ent < 2048 ? client_dobj(ent) : NULL;
 	unsigned r = dobj_make_original(info, dobj_info);
 	if (CFG_ONCE("dobjmakelog", 0) && ent >= 64) {
@@ -2830,7 +2917,7 @@ static void pad_frame_player(int pl, int play)
 
 // Mode 9: the engine is told the screen is a half (width x height/2) while the client frame records its views and its 2D: its viewport, the 2D placement and the text are made for the
 // half (nothing is squeezed afterwards), drawn into the top rows of the frame; the compositor copies those rows into the half of the picture. Video globals (rva): 0x4113724 height,
-// 0x411372c and 0x4358e84 the window height again, 0x4113738 aspect, 0x411373c pixel aspect (= height * aspect / width), the cgame's own aspect 0x43c640.
+// 0x411372c and 0x4358e84 the window height again, RVA_VIDEO_ASPECT aspect, RVA_PIXEL_ASPECT pixel aspect (= height * aspect / width), the cgame's own aspect RVA_CG_ASPECT.
 static float video_saved_f[3];
 static int video_saved_i[3];
 static int video_pushed;
@@ -2902,7 +2989,7 @@ static void video_push(void)
 	if (mode != 9 || !comp_w || !comp_h)
 		return;
 	int *h1 = (int *)(base + 0x4113724), *h2 = (int *)(base + 0x411372c), *h3 = (int *)(base + 0x4358e84);
-	float *a = (float *)(base + 0x4113738), *pa = (float *)(base + 0x411373c), *ca = (float *)(base + 0x43c640);
+	float *a = (float *)(base + RVA_VIDEO_ASPECT), *pa = (float *)(base + RVA_PIXEL_ASPECT), *ca = (float *)(base + RVA_CG_ASPECT);
 	int half = (int)(comp_h / 2);
 	if (!video_pushed) { // the first time: what the engine had, to give back when the picture is not split any more
 		video_saved_i[0] = *h1, video_saved_i[1] = *h2, video_saved_i[2] = *h3;
@@ -2916,7 +3003,7 @@ static void video_push(void)
 	*pa = 1.0f;
 	*ca = *a;
 	if (ctx_current == 0 && ctx_store[1][0]) // context 1's cgame block holds its own copy of the cgame's aspect
-		*(float *)(ctx_store[1][0] + (0x43c640 - ranges[0].rva)) = *a;
+		*(float *)(ctx_store[1][0] + (RVA_CG_ASPECT - ranges[0].rva)) = *a;
 }
 static void video_pop(void)
 {
@@ -2926,11 +3013,11 @@ static void video_pop(void)
 	*(int *)(base + 0x4113724) = video_saved_i[0];
 	*(int *)(base + 0x411372c) = video_saved_i[1];
 	*(int *)(base + 0x4358e84) = video_saved_i[2];
-	*(float *)(base + 0x4113738) = video_saved_f[0];
-	*(float *)(base + 0x411373c) = video_saved_f[1];
-	*(float *)(base + 0x43c640) = video_saved_f[2];
+	*(float *)(base + RVA_VIDEO_ASPECT) = video_saved_f[0];
+	*(float *)(base + RVA_PIXEL_ASPECT) = video_saved_f[1];
+	*(float *)(base + RVA_CG_ASPECT) = video_saved_f[2];
 	if (ctx_store[1][0])
-		*(float *)(ctx_store[1][0] + (0x43c640 - ranges[0].rva)) = video_saved_f[2];
+		*(float *)(ctx_store[1][0] + (RVA_CG_ASPECT - ranges[0].rva)) = video_saved_f[2];
 	video_pushed = 0;
 }
 
@@ -3241,8 +3328,8 @@ static void usercmd_step_inner(int lc)
 		if (++seen % 10 == 0 && seen < 3000) {
 			const uint8_t *c0 = base + RVA_SV_CLIENTS + 0x1630, *c1 = base + RVA_SV_CLIENTS + SV_CLIENT_STRIDE + 0x1630;
 			log_printf("native: step %u ctx %d: client 0 cmd t %d yaw %d pitch %d | client 1 cmd t %d yaw %d pitch %d | ctx1 acc yaw %.1f pitch %.1f", seen, ctx_current, *(int *)c0, *(int *)(c0 + 12),
-				   *(int *)(c0 + 8), *(int *)c1, *(int *)(c1 + 12), *(int *)(c1 + 8), ctx_store[1][4] ? *(float *)(ctx_store[1][4] + 0x60) : -1.0f,
-				   ctx_store[1][4] ? *(float *)(ctx_store[1][4] + 0x5c) : -1.0f);
+				   *(int *)(c0 + 8), *(int *)c1, *(int *)(c1 + 12), *(int *)(c1 + 8), ctx_store[1][4] ? *(float *)(ctx_store[1][4] + ACC_IN_CLS + 4) : -1.0f,
+				   ctx_store[1][4] ? *(float *)(ctx_store[1][4] + ACC_IN_CLS) : -1.0f);
 		}
 	}
 	if (ctx1_ready && ctx_current == 0 && ctx_store[1][5]) {
@@ -3306,7 +3393,7 @@ void native_unswap_entities(void)
 {
 	if (!entities_swapped)
 		return;
-	uint8_t *e0 = base + 0x441070, *e1 = e0 + 0x1a8, t[0x1a8];
+	uint8_t *e0 = base + RVA_CENT, *e1 = e0 + CENT_SIZE, t[CENT_SIZE];
 	memcpy(t, e0, sizeof(t));
 	memcpy(e0, e1, sizeof(t));
 	memcpy(e1, t, sizeof(t));
@@ -3320,7 +3407,7 @@ void native_unswap_entities(void)
 // Context 1's own entity table holds player 2's data in both slots 0 and 1 (swaplog), so player 1's body was never drawn in the bottom half and player 2's own body
 // was (from inside, late behind the camera). Context 0's entity 0 is player 1's valid data: it is copied here at the start of context 0's draw and put into slot 1
 // for context 1's draw ([native] p0copy=0 turns it off).
-static uint8_t p0_ent[0x1a8];
+static uint8_t p0_ent[CENT_SIZE];
 static int p0_ent_ok;
 #define LAG_HIST 128
 static struct { double t; float acc[2]; } lag_hist[LAG_HIST];
@@ -3338,7 +3425,7 @@ static float lag_acc_of(int k)
 {
 	if (ctx_current == k)
 		return *(float *)(base + RVA_ACC_PITCH + 4);
-	return ctx_store[k][4] ? *(float *)(ctx_store[k][4] + 0x60) : 0.0f;
+	return ctx_store[k][4] ? *(float *)(ctx_store[k][4] + ACC_IN_CLS + 4) : 0.0f;
 }
 static float lag_wrap(float d)
 {
@@ -3390,10 +3477,10 @@ static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 	// only while a split screen session runs: the hooks stay in place afterwards and must not touch a normal game's entities (review 2026-10-28)
 	if (!on || !native_active || n != (ctx_current == 0 ? 1 : 0) || lag_hist_n < 8)
 		return;
-	float *e = (float *)(base + 0x441070 + (size_t)n * 0x1a8);
-	const int yidx[3] = {10, 42, 73}, pidx[3] = {6, 32, 63};
+	float *e = (float *)(base + RVA_CENT + (size_t)n * CENT_SIZE);
+	const int yidx[3] = {CF_YAW0, CF_YAW1, CF_YAW2}, pidx[3] = {CF_ORG0, CF_ORG1, CF_ORG2};
 	double now = lag_now();
-	float seen = e[73];
+	float seen = e[CF_YAW2];
 	float measured = lag_wrap(seen - lag_acc_at(k, now - 0.125));
 	if (!lag_offset_set[k]) {
 		lag_offset[k] = measured;
@@ -3406,7 +3493,7 @@ static void lag_fix_yaw(int n, int k, float saved[LAG_SAVED], int *applied)
 	// a tracked offset to that frozen yaw) kept the error ([native] psyaw=0 goes back to it)
 	float fresh = lag_wrap(lag_acc_of(k) + lag_offset[k]);
 	if (CFG_ONCE("psyaw", 1)) {
-		const uint8_t *ps = ctx_current == k ? base + 0x535d38 : (ctx_store[k][5] ? ctx_store[k][5] + CL_BLOCK_PS : NULL);
+		const uint8_t *ps = ctx_current == k ? base + RVA_CL_PS : (ctx_store[k][5] ? ctx_store[k][5] + CL_BLOCK_PS : NULL);
 		if (ps)
 			fresh = *(const float *)(ps + 0x10c);
 	}
@@ -3470,8 +3557,8 @@ static void lag_unfix_yaw(int n, float saved[LAG_SAVED], int applied)
 	static int keep = -1;
 	if (keep < 0)
 		keep = cfg("yawkeep", 1);
-	float *e = (float *)(base + 0x441070 + (size_t)n * 0x1a8);
-	const int yidx[3] = {10, 42, 73}, pidx[3] = {6, 32, 63};
+	float *e = (float *)(base + RVA_CENT + (size_t)n * CENT_SIZE);
+	const int yidx[3] = {CF_YAW0, CF_YAW1, CF_YAW2}, pidx[3] = {CF_ORG0, CF_ORG1, CF_ORG2};
 	for (int i = 0; i < 3; i++) {
 		if (!keep)
 			e[yidx[i]] = saved[i];
@@ -3485,8 +3572,10 @@ static void lag_unfix_yaw(int n, float saved[LAG_SAVED], int applied)
 // otherwise the number itself. Context 1 is local client 0 as far as the engine can tell, so it answered "player 0": the cgame's second per-entity pass (rva 0xb0680,
 // one call per frame) then drew player 2's OWN entity from the inside (the head at the camera, late behind it; found with Hide() on the server entity) and player 1 counted
 // as "mine" and was never drawn. The replacement below is the original function with one change: in context 1 local client 0 is player 2, entity 1 ([native] ownfix=0 off).
+#ifdef _WIN64
 static const uint8_t slot_bytes[] = {0x80, 0x3d, 0x95, 0x9c, 0x48, 0x00, 0x00, 0x44, 0x8b, 0xc1, 0x75, 0x03, 0x8b, 0xc1, 0xc3}; // cmp [flag],0; mov r8d,ecx; jne +3; mov eax,ecx; ret
 static unsigned (*slot_original)(unsigned);
+#endif
 static unsigned local_slot_hook(unsigned lc)
 {
 	static int on = -1;
@@ -3494,15 +3583,15 @@ static unsigned local_slot_hook(unsigned lc)
 		on = cfg("ownfix", 1);
 	if (on && ctx_current == 1 && lc == 0)
 		return 1;
-	if (!*(const uint8_t *)(base + 0x52fb5c))
+	if (!*(const uint8_t *)(base + RVA_COOP_BYTE))
 		return lc;
-	const uint8_t *q = base + 0x540bb8;
+	const uint8_t *q = base + RVA_COOP_SLOTS + 8;
 	for (unsigned i = 0;;) {
 		if (*(const int *)(q - 8) == 2 && *(const uint16_t *)q == lc)
 			return i;
 		i++;
-		q += 0x2650;
-		if (q > base + 0x545857)
+		q += SLOT_STRIDE;
+		if (SLOT_END_PAST(q))
 			return 0;
 	}
 }
@@ -3625,17 +3714,17 @@ static void p0_put(uint8_t *slot)
 	static int keep = -1;
 	if (keep < 0)
 		keep = cfg("p0keep", 8 | 4 | 1);
-	uint8_t saved[0x1a8];
+	uint8_t saved[CENT_SIZE];
 	memcpy(saved, slot, sizeof(saved));
 	memcpy(slot, p0_ent, sizeof(p0_ent));
 	if (keep & 1)
-		memcpy(slot, saved, 0x18);
+		memcpy(slot, saved, P0_HDR);
 	if (keep & 2)
-		memcpy(slot + 0x30, saved + 0x30, 0x30);
+		memcpy(slot + P0_REST, saved + P0_REST, P0_REST_LEN);
 	if (keep & 4)
-		memcpy(slot + 0x170, saved + 0x170, 8);
+		memcpy(slot + P0_TREE, saved + P0_TREE, 8);
 	if (keep & 8)
-		*(uint32_t *)(slot + 0xec) &= ~0x30u;
+		*(uint32_t *)(slot + CENT_FLAGS) &= ~0x30u;
 	// player 1's yaw as he looks now (his playerState in context 0's block), in the pose and in both entity states: the copy is put back into the slot several
 	// times a frame (own_write_hook, the passes), and each time it carried the yaw the entity states froze at ([native] yawkeep=0 off)
 	static int yaw_on = -1;
@@ -3644,11 +3733,29 @@ static void p0_put(uint8_t *slot)
 	if (yaw_on && ctx_store[0][5]) {
 		float y = *(const float *)(ctx_store[0][5] + CL_BLOCK_PS + 0x10c);
 		float *f = (float *)slot;
-		f[10] = f[42] = f[73] = y;
+		f[CF_YAW0] = f[CF_YAW1] = f[CF_YAW2] = y;
 	}
 }
 
+#ifdef _WIN64
 static void (*pass2_original)(unsigned);
+#else
+// 32 bits: the second pass (rva 0x202d0) lies in the engine's checked code, so it is replaced as a whole from its call in the cgame draw: the two player entities that are not "mine"
+// are drawn by the entity function 0x569ba0 (centity in ESI, local client on the stack), then 0x438f80(lc, centity) when the dword at 0x85e8cc is set. Its "mine" test is local_slot_hook.
+static unsigned local_slot_hook(unsigned lc);
+static void pass2_original(unsigned lc)
+{
+	for (int i = 0; i < 2; i++) {
+		uint8_t *e = base + RVA_CENT + (size_t)i * CENT_SIZE;
+		if (local_slot_hook(lc) == (unsigned)i || !(*(uint32_t *)(e + CENT_VALID) & 1))
+			continue;
+		uint8_t *esi = e;
+		__asm__ volatile("pushl %1\n\tcall *%2\n\taddl $4, %%esp" : "+S"(esi) : "r"(lc), "r"(base + 0x169ba0) : "eax", "ecx", "edx", "memory", "cc");
+		if (*(int *)(base + 0x45e8cc))
+			((void (*)(unsigned, void *))(base + 0x38f80))(lc, e);
+	}
+}
+#endif
 static const uint8_t pass2_bytes[] = {0x48, 0x8b, 0xc4, 0x48, 0x89, 0x68, 0x18, 0x56, 0x57, 0x41, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00};
 static void pass2_hook(unsigned lc)
 {
@@ -3674,11 +3781,11 @@ static void pass2_hook(unsigned lc)
 	if (on < 0)
 		on = cfg("p0copy", 1) && cfg("ownfix", 1);
 	if (on && ctx_current == 1 && p0_ent_ok) {
-		uint8_t saved[0x1a8];
-		memcpy(saved, base + 0x441070, sizeof(saved));
-		p0_put(base + 0x441070);
+		uint8_t saved[CENT_SIZE];
+		memcpy(saved, base + RVA_CENT, sizeof(saved));
+		p0_put(base + RVA_CENT);
 		pass2_original(lc);
-		memcpy(base + 0x441070, saved, sizeof(saved));
+		memcpy(base + RVA_CENT, saved, sizeof(saved));
 		return;
 	}
 	pass2_original(lc);
@@ -3717,7 +3824,7 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 					snprintf(names + strlen(names), sizeof(names) - strlen(names), " %s", nn);
 				}
 				log_printf("native: dobjmodels   pool[%d] %p models %d:%s | slot0 clientnum %u slot1 clientnum %u", h, (const void *)pool, nm, names,
-					   (unsigned)*(const uint16_t *)(base + 0x441070 + 0x15e), (unsigned)*(const uint16_t *)(base + 0x441070 + 0x1a8 + 0x15e));
+					   (unsigned)*(const uint16_t *)(base + RVA_CENT + 0x15e), (unsigned)*(const uint16_t *)(base + RVA_CENT + CENT_SIZE + 0x15e));
 			}
 		}
 	}
@@ -3805,7 +3912,7 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 		p0cnt_flags0 = d;
 	if (CFG_ONCE("p0cnt", 0) >= 2 && ((ctx_current == 0 && (c & 0xffff) == 1) || (ctx_current == 1 && (c & 0xffff) == 0))) {
 		int k = ctx_current;
-		memcpy(p0dump_slot[k], base + 0x441070 + (size_t)(c & 0xffff) * 0x1a8, sizeof(p0dump_slot[k]));
+		memcpy(p0dump_slot[k], base + RVA_CENT + (size_t)(c & 0xffff) * CENT_SIZE, sizeof(p0dump_slot[k]));
 		if (a && !IsBadReadPtr(a, sizeof(p0dump_dobj[k]))) {
 			memcpy(p0dump_dobj[k], a, sizeof(p0dump_dobj[k]));
 			p0dump_have[k] = 1;
@@ -3836,7 +3943,7 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 		if (c == 0 || ++seen % 1 == 0) {
 			if (seen < 5000 && seen > 800) {
 				const float *o = (const float *)b;
-				{ const float *p = (const float *)e; static const float zero[0x1a8 / 4]; const float *eo = (c & 0xffff) < 64 ? (const float *)(base + 0x441070 + (size_t)(c & 0xffff) * 0x1a8) : zero; log_printf("native: dobj add ctx1 ent %u flags %08x draw %.1f %.1f %.1f | slot %.1f %.1f %.1f yaw %.1f", c & 0xffff, d, p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, eo[63], eo[64], eo[65], eo[73]); (void)o; }
+				{ const float *p = (const float *)e; static const float zero[CENT_SIZE / 4]; const float *eo = (c & 0xffff) < 64 ? (const float *)(base + RVA_CENT + (size_t)(c & 0xffff) * CENT_SIZE) : zero; log_printf("native: dobj add ctx1 ent %u flags %08x draw %.1f %.1f %.1f | slot %.1f %.1f %.1f yaw %.1f", c & 0xffff, d, p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, eo[63], eo[64], eo[65], eo[73]); (void)o; }
 			}
 		}
 		(void)frame;
@@ -3892,7 +3999,7 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			keep_general = cfg("p0general", 0);
 		if (ctx_current == 1 && (c & 0xffff) == 0 && !keep_general) {
 			const uint8_t *ret = (const uint8_t *)__builtin_return_address(0);
-			if (ret >= base + 0x9ea20 && ret < base + 0x9ea20 + 1102)
+			if (P0GENERAL_RET(ret))
 				return 0;
 		}
 	}
@@ -3911,15 +4018,15 @@ static void own_write_hook(unsigned lc)
 		on = cfg("ownpos", 1);
 	if ((ctx_current == 0 || ctx_current == 1) && CFG_ONCE("entdump", 0)) { // QA: the cg_entities slots 0 and 1 of each context: the dwords that changed since the last look (which fields carry a body's weapon)
 		static DWORD at[2];
-		static uint32_t before[2][2][0x1a8 / 4];
+		static uint32_t before[2][2][CENT_SIZE / 4];
 		static int have[2];
 		if (split_tick && GetTickCount() - split_tick >= (DWORD)CFG_ONCE("entdump", 0) * 1000 && GetTickCount() - at[ctx_current] >= 500) {
 			at[ctx_current] = GetTickCount();
 			for (int k = 0; k < 2; k++) {
-				const uint32_t *d = (const uint32_t *)(base + 0x441070 + (size_t)k * 0x1a8);
+				const uint32_t *d = (const uint32_t *)(base + RVA_CENT + (size_t)k * CENT_SIZE);
 				char line[1400];
 				int n = snprintf(line, sizeof(line), "native: entdump ctx %d ent %d:", ctx_current, k);
-				for (int i = 0; have[ctx_current] && i < 0x1a8 / 4 && n < (int)sizeof(line) - 24; i++)
+				for (int i = 0; have[ctx_current] && i < CENT_SIZE / 4 && n < (int)sizeof(line) - 24; i++)
 					if (d[i] != before[ctx_current][k][i] && i != 0 && i != 6 && i != 7 && i != 8 && i != 0x20 && i != 0x21 && i != 0x22)
 						n += snprintf(line + n, sizeof(line) - n, " %x:%x>%x", i * 4, before[ctx_current][k][i], d[i]);
 				if (have[ctx_current] && n > 30)
@@ -3935,7 +4042,7 @@ static void own_write_hook(unsigned lc)
 		static DWORD at;
 		if (GetTickCount() - at >= 500) {
 			at = GetTickCount();
-			const uint32_t *now = (const uint32_t *)(base + 0x535d38); // context 0 is live: its playerState is in the live block
+			const uint32_t *now = (const uint32_t *)(base + RVA_CL_PS); // context 0 is live: its playerState is in the live block
 			char line[1200];
 			int n = snprintf(line, sizeof(line), "native: psdiff:");
 			for (int i = 0; have && i < 0xc00 && n < (int)sizeof(line) - 24; i++)
@@ -3951,23 +4058,28 @@ static void own_write_hook(unsigned lc)
 		static unsigned seen;
 		if (++seen % 60 == 1 && seen < 4000) {
 			const uint8_t *nps = *(const uint8_t **)(base + 0x40cad8), *pps = *(const uint8_t **)(base + 0x40cad0);
-			const float *f0 = (const float *)(base + 0x441070), *f1 = (const float *)(base + 0x441070 + 0x1a8);
+			const float *f0 = (const float *)(base + RVA_CENT), *f1 = (const float *)(base + RVA_CENT + CENT_SIZE);
 			{
-				const float *q1 = (const float *)(base + 0x535d38), *q0 = ctx_store[0][5] ? (const float *)(ctx_store[0][5] + CL_BLOCK_PS) : NULL;
+				const float *q1 = (const float *)(base + RVA_CL_PS), *q0 = ctx_store[0][5] ? (const float *)(ctx_store[0][5] + CL_BLOCK_PS) : NULL;
 				log_printf("native: ps1(live) +0x100..: %d %.1f %.1f %.1f %.1f %.1f %.1f | ps0(store) %d %.1f %.1f %.1f %.1f %.1f %.1f | acc1 %.1f", *(const int *)(q1 + 64), q1[65], q1[66], q1[67], q1[68], q1[69], q1[70],
 					   q0 ? *(const int *)(q0 + 64) : -9, q0 ? q0[65] : 0, q0 ? q0[66] : 0, q0 ? q0[67] : 0, q0 ? q0[68] : 0, q0 ? q0[69] : 0, q0 ? q0[70] : 0, *(const float *)(base + 0x533d18));
 			}
 			log_printf("native: ctx1 b28b0 lc %u: nextPs clientNum %d prevPs clientNum %d | slot0 %.1f %.1f valid %x | slot1 %.1f %.1f valid %x", lc, nps ? *(const int *)(nps + 0x100) : -9,
-				   pps ? *(const int *)(pps + 0x100) : -9, f0[6], f0[7], *(const uint32_t *)((const uint8_t *)f0 + 0x18c), f1[6], f1[7], *(const uint32_t *)((const uint8_t *)f1 + 0x18c));
+				   pps ? *(const int *)(pps + 0x100) : -9, f0[6], f0[7], *(const uint32_t *)((const uint8_t *)f0 + CENT_VALID), f1[6], f1[7], *(const uint32_t *)((const uint8_t *)f1 + CENT_VALID));
 		}
 	}
 	if (on && ctx_current == 1 && lc == 0) {
-		uint8_t *s0 = base + 0x441070, *s1 = s0 + 0x1a8;
+		uint8_t *s0 = base + RVA_CENT;
+#ifdef _WIN64
+		uint8_t *s1 = s0 + CENT_SIZE;
 		uint8_t keep0[0x18];
 		memcpy(keep0, s0 + 0x18, sizeof(keep0));
 		own_write_original(lc);
 		memcpy(s1 + 0x18, s0 + 0x18, sizeof(keep0));
 		memcpy(s0 + 0x18, keep0, sizeof(keep0));
+#else
+		own_write_original(lc); // (the 32-bit function asks local_slot_hook for its slot: it writes slot 1 itself)
+#endif
 		// player 1's entity for the whole of context 1's frame, not only for the draws: the skeleton and controllers (rva 0xb0860 between the two passes) are
 		// computed from this slot too, and with player 2's leftover position in it the body was posed in player 2's camera, depending on timing ([native] p0frame=0 off)
 		static int whole = -1;
@@ -3997,10 +4109,10 @@ static void add_entity_hook(int n)
 	if (ctx_current == 0 && n == 1 && CFG_ONCE("laglog", 0)) {
 		static unsigned lag_frames;
 		if (++lag_frames % 2 == 0 && lag_frames < 6000 && ctx_store[1][4]) {
-			const float *f = (const float *)(base + 0x441070 + (size_t)n * 0x1a8);
+			const float *f = (const float *)(base + RVA_CENT + (size_t)n * CENT_SIZE);
 			char line[1400];
-			int len = snprintf(line, sizeof(line), "native: lag acc %.2f f:", *(float *)(ctx_store[1][4] + 0x60));
-			for (int i = 0; i < 0x1a8 / 4 && len < (int)sizeof(line) - 12; i++)
+			int len = snprintf(line, sizeof(line), "native: lag acc %.2f f:", *(float *)(ctx_store[1][4] + ACC_IN_CLS + 4));
+			for (int i = 0; i < CENT_SIZE / 4 && len < (int)sizeof(line) - 12; i++)
 				len += snprintf(line + len, sizeof(line) - len, " %.1f", f[i]);
 			log_printf("%s", line);
 		}
@@ -4008,7 +4120,7 @@ static void add_entity_hook(int n)
 	if (ctx_current == 1) {
 		if (swap_entities && n == 0 && !entities_swapped) {
 			// the cgame hides the entity numbered like the local client (0) as "mine"; context 1 is local client 0 but player 1: his entity and player 0's trade places for the draw
-			uint8_t *e0 = base + 0x441070, *e1 = e0 + 0x1a8, t[0x1a8];
+			uint8_t *e0 = base + RVA_CENT, *e1 = e0 + CENT_SIZE, t[CENT_SIZE];
 			memcpy(t, e0, sizeof(t));
 			memcpy(e0, e1, sizeof(t));
 			memcpy(e1, t, sizeof(t));
@@ -4017,20 +4129,20 @@ static void add_entity_hook(int n)
 		if (log_entities && n == 0 && logging == 0 && ++frames == 700)
 			logging = 1;
 		if (logging == 1) {
-			const uint8_t *e = base + 0x441070 + (size_t)n * 0x1a8;
-			log_printf("native: ctx1 adds entity %d type %d flags %08x pos %.1f %.1f %.1f yaw %.1f", n, e[0xe0], *(unsigned *)(e + 0xec), ((const float *)e)[63], ((const float *)e)[64], ((const float *)e)[65], ((const float *)e)[73]);
+			const uint8_t *e = base + RVA_CENT + (size_t)n * CENT_SIZE;
+			log_printf("native: ctx1 adds entity %d type %d flags %08x pos %.1f %.1f %.1f yaw %.1f", n, e[CENT_TYPE], *(unsigned *)(e + CENT_FLAGS), ((const float *)e)[63], ((const float *)e)[64], ((const float *)e)[65], ((const float *)e)[73]);
 		}
 		if (CFG_ONCE("swaplog", 0) && n <= 1) {
 			static unsigned sl;
-			const float *q0 = (const float *)(base + 0x441070), *q1 = (const float *)(base + 0x441070 + 0x1a8);
+			const float *q0 = (const float *)(base + RVA_CENT), *q1 = (const float *)(base + RVA_CENT + CENT_SIZE);
 			if (++sl % 40 == 0 && sl < 1600)
-				log_printf("native: swaplog ctx1 n %d swapped %d slot0 pos %.1f %.1f type %d | slot1 pos %.1f %.1f type %d", n, entities_swapped, q0[63], q0[64], ((const uint8_t *)q0)[0xe0], q1[63], q1[64], ((const uint8_t *)q1)[0xe0]);
+				log_printf("native: swaplog ctx1 n %d swapped %d slot0 pos %.1f %.1f type %d | slot1 pos %.1f %.1f type %d", n, entities_swapped, q0[63], q0[64], ((const uint8_t *)q0)[CENT_TYPE], q1[63], q1[64], ((const uint8_t *)q1)[CENT_TYPE]);
 		}
 		{ // diagnostics: [native] skiptypes=<mask> drops, in context 1's draw, every entity whose type (byte 0xe0) has its bit set (bisect for the garbled mesh)
 			static int skiptypes = -1;
 			if (skiptypes < 0)
 				skiptypes = cfg("skiptypes", 0);
-			unsigned type = ((const uint8_t *)(base + 0x441070 + (size_t)n * 0x1a8))[0xe0];
+			unsigned type = ((const uint8_t *)(base + RVA_CENT + (size_t)n * CENT_SIZE))[CENT_TYPE];
 			if (type < 31 && (skiptypes & (1 << type)))
 				return;
 		}
@@ -4041,7 +4153,7 @@ static void add_entity_hook(int n)
 		static int swapbits = -1;
 		if (swapbits < 0)
 			swapbits = cfg("swapbits", 1);
-		unsigned *flags = (unsigned *)(base + 0x441070 + (size_t)n * 0x1a8 + 0xec);
+		unsigned *flags = (unsigned *)(base + RVA_CENT + (size_t)n * CENT_SIZE + CENT_FLAGS);
 		unsigned saved = *flags;
 		if (swapbits) {
 			unsigned b0 = saved & 0x10, b1 = saved & 0x20;
@@ -4050,18 +4162,18 @@ static void add_entity_hook(int n)
 		{
 			float sv[LAG_SAVED];
 			int ap;
-			uint8_t slot1_saved[0x1a8];
+			uint8_t slot1_saved[CENT_SIZE];
 			int p0copy = n == 0 && p0_ent_ok && CFG_ONCE("p0copy", 1);
 			if (p0copy) {
-				memcpy(slot1_saved, base + 0x441070, sizeof(slot1_saved));
-				p0_put(base + 0x441070);
+				memcpy(slot1_saved, base + RVA_CENT, sizeof(slot1_saved));
+				p0_put(base + RVA_CENT);
 			}
 			if (n == 0 && CFG_ONCE("p0log", 0)) { // player 1's body in context 1's draw: the slot as it was drawn (copy of context 0's entity 0)
 				static unsigned pl;
-				const uint8_t *e = base + 0x441070;
+				const uint8_t *e = base + RVA_CENT;
 				if (++pl % 10 == 0 && pl < 30000)
 					log_printf("native: p0log ctx1 draws entity0: ok %d copied %d pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x | own p2 pos %.1f %.1f", p0_ent_ok, p0copy, (double)((const float *)e)[63], (double)((const float *)e)[64], (double)((const float *)e)[65],
-						   (double)((const float *)e)[73], e[0xe0], *(const unsigned *)(e + 0xec), *(const unsigned *)(e + 0x18c), (double)*(const float *)(base + 0x42245c), (double)*(const float *)(base + 0x422460));
+						   (double)((const float *)e)[73], e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS), *(const unsigned *)(e + CENT_VALID), (double)*(const float *)(base + 0x42245c), (double)*(const float *)(base + 0x422460));
 			}
 			if (n == 0)
 				lag_record();
@@ -4069,7 +4181,7 @@ static void add_entity_hook(int n)
 			add_entity_original(n);
 			lag_unfix_yaw(n, sv, ap);
 			if (p0copy)
-				memcpy(base + 0x441070, slot1_saved, sizeof(slot1_saved));
+				memcpy(base + RVA_CENT, slot1_saved, sizeof(slot1_saved));
 		}
 		*flags = saved;
 		return;
@@ -4078,14 +4190,14 @@ static void add_entity_hook(int n)
 		float sv[LAG_SAVED];
 		int ap;
 		if (n == 0) {
-			memcpy(p0_ent, base + 0x441070, sizeof(p0_ent));
+			memcpy(p0_ent, base + RVA_CENT, sizeof(p0_ent));
 			p0_ent_ok = 1;
 			lag_record();
 			if (CFG_ONCE("p0log", 0)) { // what context 0's draw hands over as player 1's entity
 				static unsigned cl0;
 				if (++cl0 % 10 == 0 && cl0 < 30000)
 					log_printf("native: p0log ctx0 captured entity0: pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x", (double)((const float *)p0_ent)[63], (double)((const float *)p0_ent)[64], (double)((const float *)p0_ent)[65],
-						   (double)((const float *)p0_ent)[73], p0_ent[0xe0], *(const unsigned *)(p0_ent + 0xec), *(const unsigned *)(p0_ent + 0x18c));
+						   (double)((const float *)p0_ent)[73], p0_ent[CENT_TYPE], *(const unsigned *)(p0_ent + CENT_FLAGS), *(const unsigned *)(p0_ent + CENT_VALID));
 			}
 		}
 		lag_fix_yaw(n, 1, sv, &ap); // player 1's body in context 0's picture
@@ -4123,7 +4235,7 @@ static void ent_clean_hook(void)
 {
 	static int logged;
 	if (logged < 60 && CFG_ONCE("entcleanlog", 0)) {
-		uint32_t *f = (uint32_t *)(base + 0x52c300);
+		uint32_t *f = (uint32_t *)(base + RVA_ENT_FLAGS);
 		char line[400];
 		int n = snprintf(line, sizeof(line), "native: entity cleanup in context %d, flags:", ctx_current);
 		int any = 0;
@@ -4142,7 +4254,7 @@ static void ent_clean_hook(void)
 		// makes it the current one (rva 0x1fec30), and a flag wiped before context 0's cleanup ran left the entity without a client DObj for good: not drawn (Price on Contingency, in some runs).
 		// Context 0's next cleanup takes them. [native] cleanwipe=1 clears them as before.
 		if (CFG_ONCE("cleanwipe", 0)) {
-			uint32_t *f = (uint32_t *)(base + 0x52c300);
+			uint32_t *f = (uint32_t *)(base + RVA_ENT_FLAGS);
 			memset(f, 0, 64 * sizeof(uint32_t));
 		}
 		return;
@@ -4456,6 +4568,95 @@ static void list_players_install(void)
 	absolute_patch(site, 2, &n_zero_copy);
 }
 
+void *n32_vm_blend_target;
+void n32_scene2d_hook(void *vp);
+void n32_final2d_hook(void *vp);
+void n32_scene2d_hook(void *vp)
+{
+	scene2d_hook(vp);
+}
+void n32_final2d_hook(void *vp)
+{
+	final2d_hook(vp);
+}
+unsigned n32_dobj_make_hook(void *info, void *dobj_info);
+unsigned n32_dobj_make_hook(void *info, void *dobj_info)
+{
+	return dobj_make_hook(info, dobj_info);
+}
+// the entity make (EDI = entity info, EBX = DObj info, result in EAX) and the first-person weapon's blend (the DObj in ESI, two stack arguments the caller cleans)
+__asm__(".text\n"
+	".globl _n32_dobj_make_stub\n"
+	"_n32_dobj_make_stub:\n"
+	"	pushl %ebx\n"
+	"	pushl %edi\n"
+	"	call _n32_dobj_make_hook\n"
+	"	addl $8, %esp\n"
+	"	ret\n"
+	".globl _n32_vm_blend_stub\n"
+	"_n32_vm_blend_stub:\n"
+	"	cmpl $0, _native_active\n"
+	"	je 1f\n"
+	"	testl %esi, %esi\n"
+	"	je 2f\n"
+	"	cmpl $0, (%esi)\n"
+	"	je 2f\n"
+	"1:	jmp *_n32_vm_blend_target\n"
+	"2:	ret\n"
+	".globl _n32_scene2d_stub\n"
+	"_n32_scene2d_stub:\n"
+	"	pushl %esi\n"
+	"	call _n32_scene2d_hook\n"
+	"	addl $4, %esp\n"
+	"	ret\n"
+	".globl _n32_final2d_stub\n"
+	"_n32_final2d_stub:\n"
+	"	pushl %esi\n"
+	"	call _n32_final2d_hook\n"
+	"	addl $4, %esp\n"
+	"	ret\n");
+extern char n32_dobj_make_stub[], n32_vm_blend_stub[], n32_scene2d_stub[], n32_final2d_stub[];
+
+static int hook_calls32(const uint32_t *sites, size_t n, void *hook, void **original, const char *what)
+{
+	void *dummy = NULL;
+	for (size_t i = 0; i < n; i++)
+		if (!jhook_call(base + sites[i], hook, original ? original : &dummy)) {
+			log_printf("native: no call at rva 0x%x (%s)", sites[i], what);
+			return 0;
+		}
+	return 1;
+}
+
+// the entity side (docs/32bit-native-map/entities.md): none of these places may lie in the engine's checked code (docs/32bit-plan.md)
+static int hooks_apply32_entities(void)
+{
+	static const uint32_t ent_clean_sites[] = {0xc1c24, 0x59d71, 0x16e9b1, 0x9cb6a}; // (the fifth caller, 0x432872, is in checked code: left alone)
+	static const uint32_t slot_sites[] = {0x40e0e, 0x667ff, 0x904ab, 0xa7e45, 0xba4e9}; // callers of the "mine" rule 0x4215a0 outside the checked code (pass2's own call is replaced with pass2)
+	static const uint32_t make_sites[] = {0xa5a28, 0xa5ae7, 0xc1d35, 0xc1e73};
+	static const uint32_t vm_setup_sites[] = {0xb2e52, 0xacea0, 0xb72a, 0xaf6c1, 0xaf719};
+	static const uint32_t vm_blend_sites[] = {0x1723ec};
+	static const uint32_t pass2_sites[] = {0x6685b};
+	static const uint8_t add_entity_bytes32[] = {0x83, 0xec, 0x18, 0x53, 0x55};
+	static const uint8_t own_write_bytes32[] = {0x83, 0xec, 0x10, 0x55, 0x8b, 0x6c, 0x24, 0x18};
+	static const uint8_t dobj_add_bytes32[] = {0xd9, 0xee, 0x83, 0xec, 0x14};
+	if (!hook_calls32(ent_clean_sites, sizeof(ent_clean_sites) / sizeof(ent_clean_sites[0]), ent_clean_hook, (void **)&ent_clean_original, "entity cleanup") ||
+	    !hook_calls32(slot_sites, sizeof(slot_sites) / sizeof(slot_sites[0]), local_slot_hook, NULL, "local slot") ||
+	    !hook_calls32(make_sites, sizeof(make_sites) / sizeof(make_sites[0]), n32_dobj_make_stub, &dobj_make_target, "DObj make") ||
+	    !hook_calls32(vm_setup_sites, sizeof(vm_setup_sites) / sizeof(vm_setup_sites[0]), viewmodel_setup_hook, (void **)&viewmodel_setup_original, "view model setup") ||
+	    !hook_calls32(vm_blend_sites, 1, n32_vm_blend_stub, &n32_vm_blend_target, "view model blend") ||
+	    !hook_calls32(pass2_sites, 1, pass2_hook, NULL, "second entity pass"))
+		return 0;
+	if (!jhook_function(base + 0x6df50, add_entity_bytes32, sizeof(add_entity_bytes32), add_entity_hook, (void **)&add_entity_original) ||
+	    !jhook_function(base + 0x904a0, own_write_bytes32, sizeof(own_write_bytes32), own_write_hook, (void **)&own_write_original) ||
+	    !jhook_function(base + 0x103c00, dobj_add_bytes32, sizeof(dobj_add_bytes32), dobj_add_hook, (void **)&dobj_add_original)) {
+		log_printf("native: entity function bytes differ");
+		return 0;
+	}
+	log_printf("native: 32-bit entity hooks on");
+	return 1;
+}
+
 static int hooks_apply32_contexts(void)
 {
 	static const struct {
@@ -4480,6 +4681,15 @@ static int hooks_apply32_contexts(void)
 			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
 			return 0;
 		}
+	if (cfg("entities", 1) && !hooks_apply32_entities())
+		return 0;
+	if (cfg("experiment", 0) >= 8) { // the console's way (mode 8 / 10): the 2D of the scene goes into layers of its own
+		static const uint32_t scene2d_site[] = {0x1536fc}, final2d_site[] = {0x1537ae}, wait_site[] = {RVA_WAIT_ALPHA_SITE};
+		if (!hook_calls32(scene2d_site, 1, n32_scene2d_stub, &scene2d_target, "scene 2D pass") || !hook_calls32(final2d_site, 1, n32_final2d_stub, &final2d_target, "frame 2D list") ||
+		    !hook_calls32(wait_site, 1, wait_alpha_hook, (void **)&wait_alpha_original, "wait alpha"))
+			return 0;
+		log_printf("native: 32-bit 2D layer hooks on");
+	}
 	swap_entities = cfg("swapent", 0);
 	skip_entity = cfg("skipent", 1);
 	log_entities = cfg("entdraw", 0);
@@ -4493,6 +4703,7 @@ static int hooks_apply32_contexts(void)
 }
 #endif
 
+#ifdef _WIN64
 static void contexts_install(void)
 {
 	static const struct {
@@ -4579,6 +4790,7 @@ static void contexts_install(void)
 	ctx_on = 1;
 	log_printf("native: client contexts on (call sites redirected)");
 }
+#endif
 
 // The scripts decide "co-op" from the dvar `coop` (rva 0x1905308, a bool whose script-side writes are refused); the engine's own co-op byte (rva 0x52fb5c) stays 0 so that the engine takes its
 // local-players branch. [native] coopdvar=1 keeps the dvar at 1 (written from a thread, every 20 ms) so that the level scripts, the mod's among them, run their two-player code.
@@ -4746,8 +4958,8 @@ static int activate(int players)
 	cfg_gen++;
 	mode = cfg("experiment", 10);
 #ifndef _WIN64
-	if (mode > 5)
-		mode = 5; // 32 bits: the compositor's 2D layers (mode 10) are not ported yet
+	if (mode != 5 && mode != 10)
+		mode = 5; // 32 bits: modes 5 and 10 (the others are experiments of the 64-bit port's history)
 #endif
 	if (!hooks_apply() || !players_apply(players)) {
 		mode = 0;
