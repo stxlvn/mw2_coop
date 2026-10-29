@@ -29,10 +29,10 @@
 #define RB_STOP_ALL 0x3c2168
 #else
 // the 32-bit official build (docs/32bit-native-map/aimrumble.md): entries are 12 bytes {name, func, developer}
-#define RVA_EMPTY_BUILTIN 0xcf10
-#define RVA_SCR_GET_STRING 0xd5f20
-#define RVA_SCR_GET_VECTOR 0x64850
-#define RVA_G_ENTITIES 0xaa76b8
+#define RVA_EMPTY_BUILTIN XR(0xcf10)
+#define RVA_SCR_GET_STRING XR(0xd5f20)
+#define RVA_SCR_GET_VECTOR XR(0x64850)
+#define RVA_G_ENTITIES XR(0xaa76b8)
 #define GENTITY_SIZE 0x270
 #define GENTITY_ORIGIN 0xe8
 #define GENTITY_CLIENT 0x108
@@ -305,7 +305,7 @@ void rumble_install(void)
 	};
 	int done = 0;
 	for (size_t i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++) {
-		uint8_t *entry = base + builtins[i].rva;
+		uint8_t *entry = base + XR(builtins[i].rva);
 		const char *name = *(const char **)entry;
 		void **func = (void **)(entry + sizeof(char *));
 		if (!name || strcmp(name, builtins[i].name) || *func != (void *)(base + RVA_EMPTY_BUILTIN)) {

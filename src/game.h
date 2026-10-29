@@ -229,3 +229,14 @@ unsigned long long game_peek(unsigned long long rva, int width);
 // command function.
 const char *game_cmd_argv(int i);
 const char *game_sv_cmd_argv(int i);
+
+// The 32-bit native code (native.c, rumble.c, padopts.c, padglyphs.c) is written with the official 32-bit build's addresses. In the iw4x-sp profile (1.0.159) XR() turns an
+// official RVA into the 159 RVA through a table that tools/gen_addr159.py builds from the source (tools/map159.py maps by byte signatures); XV() does the same for a VA.
+#ifdef MW2COOP_IW4X
+unsigned addr159(unsigned rva);
+#define XR(r) addr159(r)
+#define XV(va) (0x400000u + addr159((va) - 0x400000u))
+#else
+#define XR(r) (r)
+#define XV(va) (va)
+#endif

@@ -33,8 +33,8 @@ static const struct {
 #define RVA_AIM_DVARS 0x3cf050		 // the aim_* dvars: aim_aimAssistRangeScale (0x3cf050) ... aim_scale_view_axis (0x3cf178)
 #define RVA_AIM_DVARS_END 0x3cf180
 #else
-#define RVA_DVAR_REGISTER_BOOL 0x866b0   // VA 0x4866b0, cdecl, the value is a byte at [esp+8] (docs/32bit-native-map/inputui.md)
-#define RVA_DVAR_REGISTER_FLOAT 0x9f700  // VA 0x49f700, cdecl
+#define RVA_DVAR_REGISTER_BOOL XR(0x866b0)   // VA 0x4866b0, cdecl, the value is a byte at [esp+8] (docs/32bit-native-map/inputui.md)
+#define RVA_DVAR_REGISTER_FLOAT XR(0x9f700)  // VA 0x49f700, cdecl
 extern const uint32_t aim_dvar_rvas32[38]; // native.c: where each aim_* dvar_t * lives in 32 bits (scattered, not one block)
 #endif
 #define DVAR_ARCHIVE 1
@@ -240,9 +240,6 @@ static void patch_controls(void)
 
 void padopts_tick(void)
 {
-#ifdef MW2COOP_IW4X // the addresses above are the official build's: no gamepad pages in the iw4x-sp profile
-	return;
-#endif
 	register_dvars();
 	unlock_aim_dvars();
 	add_page(0);

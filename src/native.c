@@ -38,10 +38,10 @@ static const uint8_t begin_frame_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 
 #else
 // The 32-bit official build (docs/32bit-native-map/render.md): the cgame's DrawActiveFrame is cdecl (local client, int, int); its first five bytes (sub esp,0xc; push ebx; push ebp) are clean to copy.
 // The begin-frame is not hooked at its start (its first instructions are a push run and a relative call) but at its call in the cgame draw.
-#define RVA_CG_DRAW 0x0666c0
-#define RVA_BEGIN_FRAME_CALL 0x066831 // the call of the begin-frame (VA 0x50d800) inside the cgame draw
-#define RVA_SUBWINDOW_DVAR 0x1b19f98
-#define RVA_CG_TIME 0x374c20
+#define RVA_CG_DRAW XR(0x0666c0)
+#define RVA_BEGIN_FRAME_CALL XR(0x066831) // the call of the begin-frame (VA 0x50d800) inside the cgame draw
+#define RVA_SUBWINDOW_DVAR XR(0x1b19f98)
+#define RVA_CG_TIME XR(0x374c20)
 static const uint8_t cg_draw_bytes[] = {0x83, 0xec, 0x0c, 0x53, 0x55};
 #endif
 static void (*cg_draw_original)(unsigned, int, int);
@@ -127,35 +127,35 @@ static uint8_t *base;
 #define P0GENERAL_RET(r) ((r) >= base + 0x9ea20 && (r) < base + 0x9ea20 + 1102)
 #else
 // the 32-bit official build: docs/32bit-native-map/clientctx.md
-#define RVA_LOCAL_PLAYERS_STORE 0xbf9db
-#define RVA_SV_ADD_COMMAND 0xa550
-#define RVA_COM_ERROR 0x584f0
-#define RVA_SV_CLIENTS 0x1723988
+#define RVA_LOCAL_PLAYERS_STORE XR(0xbf9db)
+#define RVA_SV_ADD_COMMAND XR(0xa550)
+#define RVA_COM_ERROR XR(0x584f0)
+#define RVA_SV_CLIENTS XR(0x1723988)
 #define SV_CLIENT_STRIDE 0x1674
-#define RVA_COOP_BYTE 0x48897c
-#define RVA_LOCAL_PLAYERS 0x338c6c
-#define RVA_COOP_SLOTS 0x48f560
+#define RVA_COOP_BYTE XR(0x48897c)
+#define RVA_LOCAL_PLAYERS XR(0x338c6c)
+#define RVA_COOP_SLOTS XR(0x48f560)
 #define SLOT_STRIDE 0x263c
-#define RVA_SV_CLIENT_THINK 0xe7750
-#define RVA_KEY_CATCHERS 0x525bb8
-#define RVA_CLS_STATE 0x525bc0
-#define RVA_ACC_PITCH 0x525c34
+#define RVA_SV_CLIENT_THINK XR(0xe7750)
+#define RVA_KEY_CATCHERS XR(0x525bb8)
+#define RVA_CLS_STATE XR(0x525bc0)
+#define RVA_ACC_PITCH XR(0x525c34)
 #define ACC_IN_CLS (0x525c34 - 0x525bc0)
-#define RVA_CG_CLIENTNUM 0x35f2a0
-#define RVA_CL_PS 0x526c58
+#define RVA_CG_CLIENTNUM XR(0x35f2a0)
+#define RVA_CL_PS XR(0x526c58)
 #define CL_RING_MASK 63
 #define CL_CMDNUM 0x1000
 #define CL_SENT 0x1004
 #define CL_BLOCK_PS 0x1018
-#define RVA_NOPREDICT_DVAR 0x45e8e8
-#define RVA_FOV_DVAR 0x45e968
-#define RVA_DRAWGUN_DVAR 0x35efec
-#define RVA_WAIT_TYPE 0x12ac60
-#define RVA_CLIENT_INIT_A 0x1dfa0
-#define RVA_CLIENT_INIT_B 0x956e0
-#define RVA_COOP_DVAR 0x167f0ec
+#define RVA_NOPREDICT_DVAR XR(0x45e8e8)
+#define RVA_FOV_DVAR XR(0x45e968)
+#define RVA_DRAWGUN_DVAR XR(0x35efec)
+#define RVA_WAIT_TYPE XR(0x12ac60)
+#define RVA_CLIENT_INIT_A XR(0x1dfa0)
+#define RVA_CLIENT_INIT_B XR(0x956e0)
+#define RVA_COOP_DVAR XR(0x167f0ec)
 #define MSG_T_SIZE 0x28
-#define RVA_CENT 0x392848
+#define RVA_CENT XR(0x392848)
 #define CENT_SIZE 0x198
 #define CENT_TYPE 0xd4
 #define CENT_FLAGS 0xe0
@@ -170,11 +170,11 @@ static uint8_t *base;
 #define P0_REST 0x2c
 #define P0_REST_LEN 0x2c
 #define P0_TREE 0x164
-#define SLOT_END_PAST(q) ((q) >= base + 0x4941e0)
-#define RVA_AIM_GLOB 0x33ba90
-#define RVA_AIM_TARGET_GLOB 0x33cec0
-#define RVA_LEVEL_NUM_ENT 0xca3c18
-#define RVA_GENTITIES 0xaa76b8
+#define SLOT_END_PAST(q) ((q) >= base + XR(0x4941e0))
+#define RVA_AIM_GLOB XR(0x33ba90)
+#define RVA_AIM_TARGET_GLOB XR(0x33cec0)
+#define RVA_LEVEL_NUM_ENT XR(0xca3c18)
+#define RVA_GENTITIES XR(0xaa76b8)
 #define GENT_SIZE 0x270
 #define GENT_SENTIENT 0x110
 #define SENT_TEAM 4
@@ -183,21 +183,21 @@ static uint8_t *base;
 #define WD_AIM_RANGE 0x2e4
 #define WD_AIM_RANGE_ADS 0x2e8
 #define WD_AUTO_RANGE 0x2e0
-#define WEAPON_DEF(w) (*(const uint8_t *const *)(base + 0x1669d08 + (size_t)(w) * 4)) // the table of weapon def pointers
-#define RVA_CG_ASPECT 0x35f018
-#define RVA_PIXEL_ASPECT 0x188edb8
-#define RVA_VIDEO_ASPECT 0x188edb4
-#define RVA_WAIT_ALPHA_SITE 0x15ef17
-#define RVA_ENT_FLAGS 0x46b280
-#define RVA_CLIENT_DOBJ 0xf3c70
-#define RVA_SERVER_DOBJ 0x95740
-#define RVA_ENT_INFO 0xdd30
-#define RVA_SDOBJ_INFO 0x3f4e0
-#define RVA_DOBJ_CLRBIT 0x10f50
+#define WEAPON_DEF(w) (*(const uint8_t *const *)(base + XR(0x1669d08) + (size_t)(w) * 4)) // the table of weapon def pointers
+#define RVA_CG_ASPECT XR(0x35f018)
+#define RVA_PIXEL_ASPECT XR(0x188edb8)
+#define RVA_VIDEO_ASPECT XR(0x188edb4)
+#define RVA_WAIT_ALPHA_SITE 0x15ef17 // (a call site: hook_calls32 translates it)
+#define RVA_ENT_FLAGS XR(0x46b280)
+#define RVA_CLIENT_DOBJ XR(0xf3c70)
+#define RVA_SERVER_DOBJ XR(0x95740)
+#define RVA_ENT_INFO XR(0xdd30)
+#define RVA_SDOBJ_INFO XR(0x3f4e0)
+#define RVA_DOBJ_CLRBIT XR(0x10f50)
 #define DOBJ_NUMMODELS 9
 #define DOBJ_MODELS 0x98
 // the add-by-type cases that add the "general" entity types: 0x561d00 (case 0), 0x561d60 (case 2), 0x5621d0 (case 5)
-#define P0GENERAL_RET(r) (((r) >= base + 0x161d00 && (r) < base + 0x161d5a) || ((r) >= base + 0x161d60 && (r) < base + 0x161e17) || ((r) >= base + 0x1621d0 && (r) < base + 0x162294))
+#define P0GENERAL_RET(r) (((r) >= base + XR(0x161d00) && (r) < base + XR(0x161d5a)) || ((r) >= base + XR(0x161d60) && (r) < base + XR(0x161e17)) || ((r) >= base + XR(0x1621d0) && (r) < base + XR(0x162294)))
 #endif
 static char settings_path[MAX_PATH];
 static int mode;
@@ -1888,6 +1888,7 @@ static const range_t ranges[] = {
 #define RANGE_FX 10
 #endif
 #define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
+#define RANGE_RVA(i) XR(ranges[i].rva) // (iw4x-sp: the range's start in the 159 image, the same length)
 static uint8_t *ctx_store[2][NRANGES];
 static int ctx_current;
 
@@ -1898,7 +1899,7 @@ static void ctx_ensure(void)
 	for (size_t i = 0; i < NRANGES; i++) { // first use: both copies start as what the live memory holds now
 		ctx_store[0][i] = VirtualAlloc(NULL, ranges[i].size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 		ctx_store[1][i] = VirtualAlloc(NULL, ranges[i].size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-		memcpy(ctx_store[1][i], base + ranges[i].rva, ranges[i].size);
+		memcpy(ctx_store[1][i], base + RANGE_RVA(i), ranges[i].size);
 	}
 }
 
@@ -1942,7 +1943,7 @@ static void ctx_swap_mask(int to, unsigned mask)
 		if (i == RANGE_FX && !fx_on)
 			continue;
 #endif
-		uint8_t *live = base + ranges[i].rva;
+		uint8_t *live = base + RANGE_RVA(i);
 		memcpy(ctx_store[ctx_current][i], live, ranges[i].size);
 		memcpy(live, ctx_store[to][i], ranges[i].size);
 	}
@@ -1967,7 +1968,7 @@ static void ctx_seed_cgame(void)
 	// Context 1 starts as a copy of context 0 as it is now (the cgame registered dvars and media for the whole process, the snapshot pointers point into their own block), except for
 	// the playerstate the server published for client 1, which is its own.
 	for (size_t i = 0; i < NRANGES; i++) {
-		uint8_t *live = base + ranges[i].rva;
+		uint8_t *live = base + RANGE_RVA(i);
 		if (i == 5) { // the cl block: everything but the playerstate at +0x2018 (32 bits: +0x1018)
 			memcpy(ctx_store[1][i], live, CL_BLOCK_PS);
 			memcpy(ctx_store[1][i] + CL_BLOCK_PS + 0xaca4, live + CL_BLOCK_PS + 0xaca4, ranges[i].size - CL_BLOCK_PS - 0xaca4);
@@ -2225,15 +2226,15 @@ static void ctx_dump(const char *what)
 #else
 	static const uint32_t probes[] = {0x374c20, 0x35f2a0, 0x35f2c8, 0x35f2bc, 0x35f2b8, 0x374c2c}; // cg.time, the cgame's client numbers and pointers, cg.ps
 #endif
-	uint8_t *r1_live = base + ranges[0].rva;
+	uint8_t *r1_live = base + RANGE_RVA(0);
 	uint8_t *r1 = ctx_current == 0 && ctx_store[1][0] ? ctx_store[1][0] : r1_live;
 	char line[400];
 	int n = snprintf(line, sizeof(line), "native: %s ctx1:", what);
 	for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++)
-		n += snprintf(line + n, sizeof(line) - n, " %x=%llx", probes[i], *(unsigned long long *)(r1 + probes[i] - ranges[0].rva));
+		n += snprintf(line + n, sizeof(line) - n, " %x=%llx", XR(probes[i]), *(unsigned long long *)(r1 + XR(probes[i]) - RANGE_RVA(0)));
 	n += snprintf(line + n, sizeof(line) - n, " | ctx0:");
 	for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++)
-		n += snprintf(line + n, sizeof(line) - n, " %x=%llx", probes[i], *(unsigned long long *)(r1_live + probes[i] - ranges[0].rva));
+		n += snprintf(line + n, sizeof(line) - n, " %x=%llx", XR(probes[i]), *(unsigned long long *)(r1_live + XR(probes[i]) - RANGE_RVA(0)));
 	log_printf("%s", line);
 }
 
@@ -2333,7 +2334,7 @@ static void ctx_after_draw(void)
 	log_printf("native: starting context 1");
 	ctx_seed_cgame();
 #ifdef _WIN64
-	memset(ctx_store[1][0] + (0x440730 - ranges[0].rva), 0, 0x40); // context 1 makes its own view model (see viewmodel_setup_hook)
+	memset(ctx_store[1][0] + (0x440730 - RANGE_RVA(0)), 0, 0x40); // context 1 makes its own view model (see viewmodel_setup_hook)
 #else
 	memset(ctx_store[1][9], 0, ranges[9].size); // (32 bits: the view model pointers are a range of their own)
 #endif
@@ -2356,7 +2357,7 @@ static void ctx_after_draw(void)
 	ctx_swap(0);
 	// the cgame's own idea of its local client number (rva 0x40caa4): the draw hides "my" entity by it and answers per-client visibility masks by it; context 1 runs as local client 0
 	// but is client 1
-	*(int *)(ctx_store[1][0] + ((RVA_CG_CLIENTNUM + 4) - ranges[0].rva)) = cfg("ctx1lc", 1);
+	*(int *)(ctx_store[1][0] + ((RVA_CG_CLIENTNUM + 4) - RANGE_RVA(0))) = cfg("ctx1lc", 1);
 	ctx1_ready = 1;
 	log_printf("native: context 1 initialised");
 	ctx_dump("after init");
@@ -2449,12 +2450,12 @@ static int kb_player(void)
 // of local client 0 and the buffer is executed at once (Cbuf_Execute, EBX = local client), so it acts on the live context's input block: the player's own, as in the 64-bit build.
 static void cbuf_run_now(void)
 {
-	void *fn = base + 0x2001c0;
+	void *fn = base + XR(0x2001c0);
 	__asm__ volatile("call *%0" : : "m"(fn), "b"(0) : "eax", "ecx", "edx", "esi", "edi", "memory", "cc");
 }
 static void pad_action(const char *name)
 {
-	((void (*)(int, const char *))(base + 0x9b40))(0, name); // Cbuf_AddText
+	((void (*)(int, const char *))(base + XR(0x9b40)))(0, name); // Cbuf_AddText
 	cbuf_run_now();
 }
 #else
@@ -2766,7 +2767,7 @@ const uint32_t aim_dvar_rvas32[38] = {0x33ba84, 0x33ce70, 0x33c934, 0x33ceb4, 0x
 static float aa_dvar(uint32_t rva) // the aim_* dvar pointers: rva 0x3cf050 .. 0x3cf178 (registered by 0x69a60); 32 bits: the same index in aim_dvar_rvas32
 {
 #ifndef _WIN64
-	rva = aim_dvar_rvas32[(rva - 0x3cf050) / 8];
+	rva = XR(aim_dvar_rvas32[(rva - 0x3cf050) / 8]);
 #endif
 	const dvar_t *d = *(const dvar_t **)(base + rva);
 	return !d ? 0.0f : d->type == DVAR_TYPE_BOOL ? (float)d->current.enabled : d->current.value;
@@ -3008,7 +3009,7 @@ static int video_pushed;
 #else
 // 32 bits: the three placements are not a regular array (docs/32bit-native-map/render.md): VA 0x937500 (the view's), 0x937578, 0x9375e8
 static const uint32_t place_rvas32[3] = {0x537500, 0x537578, 0x5375e8};
-#define PLACE_PTR(n) ((float *)(base + place_rvas32[n]))
+#define PLACE_PTR(n) ((float *)(base + XR(place_rvas32[n])))
 #endif
 static float place_saved[3][28];
 static int place_pushed;
@@ -3081,7 +3082,7 @@ static void video_push(void)
 	*pa = 1.0f;
 	*ca = *a;
 	if (ctx_current == 0 && ctx_store[1][0]) // context 1's cgame block holds its own copy of the cgame's aspect
-		*(float *)(ctx_store[1][0] + (RVA_CG_ASPECT - ranges[0].rva)) = *a;
+		*(float *)(ctx_store[1][0] + (RVA_CG_ASPECT - RANGE_RVA(0))) = *a;
 }
 static void video_pop(void)
 {
@@ -3095,7 +3096,7 @@ static void video_pop(void)
 	*(float *)(base + RVA_PIXEL_ASPECT) = video_saved_f[1];
 	*(float *)(base + RVA_CG_ASPECT) = video_saved_f[2];
 	if (ctx_store[1][0])
-		*(float *)(ctx_store[1][0] + (RVA_CG_ASPECT - ranges[0].rva)) = video_saved_f[2];
+		*(float *)(ctx_store[1][0] + (RVA_CG_ASPECT - RANGE_RVA(0))) = video_saved_f[2];
 	video_pushed = 0;
 }
 
@@ -3767,7 +3768,7 @@ static void name_self_install(void)
 static void name_self_install(void)
 {
 	static const uint8_t expected[19] = {0x84, 0xd2, 0x8b, 0xc5, 0x74, 0x03, 0x0f, 0xb7, 0x01, 0x39, 0x44, 0x24, 0x3c, 0x0f, 0x84, 0xe4, 0x00, 0x00, 0x00};
-	uint8_t *site = base + 0x15ea9e;
+	uint8_t *site = base + XR(0x15ea9e);
 	if (memcmp(site, expected, sizeof(expected))) {
 		log_printf("native: the name loop's self test is not the expected code");
 		return;
@@ -3793,9 +3794,9 @@ static void name_self_install(void)
 		return;
 	}
 	memcpy(stub, code, n);
-	int32_t rel = (int32_t)((uintptr_t)(base + 0x15eb95) - (uintptr_t)(stub + jz_at + 6));
+	int32_t rel = (int32_t)((uintptr_t)(site + (0x15eb95 - 0x15ea9e)) - (uintptr_t)(stub + jz_at + 6));
 	memcpy(stub + jz_at + 2, &rel, 4);
-	rel = (int32_t)((uintptr_t)(base + 0x15eab1) - (uintptr_t)(stub + jmp_at + 5));
+	rel = (int32_t)((uintptr_t)(site + (0x15eab1 - 0x15ea9e)) - (uintptr_t)(stub + jmp_at + 5));
 	memcpy(stub + jmp_at + 1, &rel, 4);
 	DWORD old;
 	VirtualProtect(stub, 0x1000, PAGE_EXECUTE_READ, &old);
@@ -3901,9 +3902,9 @@ static void pass2_original(unsigned lc)
 		if (local_slot_hook(lc) == (unsigned)i || !(*(uint32_t *)(e + CENT_VALID) & 1))
 			continue;
 		uint8_t *esi = e;
-		__asm__ volatile("pushl %1\n\tcall *%2\n\taddl $4, %%esp" : "+S"(esi) : "r"(lc), "r"(base + 0x169ba0) : "eax", "ecx", "edx", "memory", "cc");
-		if (*(int *)(base + 0x45e8cc))
-			((void (*)(unsigned, void *))(base + 0x38f80))(lc, e);
+		__asm__ volatile("pushl %1\n\tcall *%2\n\taddl $4, %%esp" : "+S"(esi) : "r"(lc), "r"(base + XR(0x169ba0)) : "eax", "ecx", "edx", "memory", "cc");
+		if (*(int *)(base + XR(0x45e8cc)))
+			((void (*)(unsigned, void *))(base + XR(0x38f80)))(lc, e);
 	}
 }
 #endif
@@ -4708,7 +4709,7 @@ static void client_n_install(void)
 	}
 	if (cfg("exitwatch", 0)) {
 		static const uint8_t die_bytes[6] = {0x81, 0xec, 0x00, 0x08, 0x00, 0x00};
-		if (!hook_function(base + 0x103690, die_bytes, sizeof(die_bytes), (void *)die_hook, (void **)&die_original))
+		if (!hook_function(base + XR(0x103690), die_bytes, sizeof(die_bytes), (void *)die_hook, (void **)&die_original))
 			log_printf("native: the fatal exit function's bytes differ");
 	}
 	if (cfg("countwatch", 0))
@@ -4719,7 +4720,7 @@ static void client_n_install(void)
 	for (size_t i = 0; i < sizeof(server_n_sites32) / sizeof(server_n_sites32[0]); i++) {
 		if ((int)i < lo || (int)i > hi)
 			continue;
-		uint8_t *site = (uint8_t *)(uintptr_t)server_n_sites32[i].va - 0x400000 + (uintptr_t)base;
+		uint8_t *site = (uint8_t *)(uintptr_t)XV(server_n_sites32[i].va) - 0x400000 + (uintptr_t)base;
 		uint32_t at;
 		memcpy(&at, site + server_n_sites32[i].disp, 4);
 		if (at != (uint32_t)(uintptr_t)(base + RVA_LOCAL_PLAYERS))
@@ -4731,7 +4732,7 @@ static void client_n_install(void)
 }
 static void list_players_install(void)
 {
-	uint8_t *site = base + 0x25cc10; // mov ebp, [count] in the entity list of the snapshot: the local players' own entities stay out of it
+	uint8_t *site = base + XR(0x25cc10); // mov ebp, [count] in the entity list of the snapshot: the local players' own entities stay out of it
 	uint32_t at;
 	memcpy(&at, site + 2, 4);
 	if (site[0] != 0x8b || site[1] != 0x2d || at != (uint32_t)(uintptr_t)(base + RVA_LOCAL_PLAYERS)) {
@@ -4794,8 +4795,8 @@ static int hook_calls32(const uint32_t *sites, size_t n, void *hook, void **orig
 {
 	void *dummy = NULL;
 	for (size_t i = 0; i < n; i++)
-		if (!jhook_call(base + sites[i], hook, original ? original : &dummy)) {
-			log_printf("native: no call at rva 0x%x (%s)", sites[i], what);
+		if (!jhook_call(base + XR(sites[i]), hook, original ? original : &dummy)) {
+			log_printf("native: no call at rva 0x%x (%s)", XR(sites[i]), what);
 			return 0;
 		}
 	return 1;
@@ -4820,9 +4821,9 @@ static int hooks_apply32_entities(void)
 	    !hook_calls32(vm_blend_sites, 1, n32_vm_blend_stub, &n32_vm_blend_target, "view model blend") ||
 	    !hook_calls32(pass2_sites, 1, pass2_hook, NULL, "second entity pass"))
 		return 0;
-	if (!jhook_function(base + 0x6df50, add_entity_bytes32, sizeof(add_entity_bytes32), add_entity_hook, (void **)&add_entity_original) ||
-	    !jhook_function(base + 0x904a0, own_write_bytes32, sizeof(own_write_bytes32), own_write_hook, (void **)&own_write_original) ||
-	    !jhook_function(base + 0x103c00, dobj_add_bytes32, sizeof(dobj_add_bytes32), dobj_add_hook, (void **)&dobj_add_original)) {
+	if (!jhook_function(base + XR(0x6df50), add_entity_bytes32, sizeof(add_entity_bytes32), add_entity_hook, (void **)&add_entity_original) ||
+	    !jhook_function(base + XR(0x904a0), own_write_bytes32, sizeof(own_write_bytes32), own_write_hook, (void **)&own_write_original) ||
+	    !jhook_function(base + XR(0x103c00), dobj_add_bytes32, sizeof(dobj_add_bytes32), dobj_add_hook, (void **)&dobj_add_original)) {
 		log_printf("native: entity function bytes differ");
 		return 0;
 	}
@@ -4850,21 +4851,33 @@ static int hooks_apply32_contexts(void)
 		{0x1799e8, n32_mouse2_stub, &mouse_read2_target},
 	};
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
-		if (!jhook_call(base + sites[i].site, sites[i].hook, sites[i].original)) {
-			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
+		if (!jhook_call(base + XR(sites[i].site), sites[i].hook, sites[i].original)) {
+			log_printf("native: no call at rva 0x%x, context hook %zu off", XR(sites[i].site), i);
 			return 0;
 		}
 	if (cfg("entities", 1) && !hooks_apply32_entities())
 		return 0;
 	{ // the 2D texts of the HUD (docs/32bit-native-map/inputui.md): message windows, the title lines' element draw, the names over the other player
 		static const uint8_t key_event_bytes32[] = {0x8b, 0x4c, 0x24, 0x0c, 0x53};
-		static const uint8_t msgwin_bytes32[] = {0xa1, 0xc0, 0xa7, 0x86, 0x00};
-		if (!jhook_function(base + 0xd2350, key_event_bytes32, sizeof(key_event_bytes32), key_event_hook, (void **)&key_event_original))
+		uint8_t msgwin_bytes32[] = {0xa1, 0xc0, 0xa7, 0x86, 0x00}; // mov eax, [0x86a7c0]
+#ifdef MW2COOP_IW4X
+		{
+			uint32_t at = XV(0x86a7c0);
+			memcpy(msgwin_bytes32 + 1, &at, 4);
+		}
+#endif
+		if (!jhook_function(base + XR(0xd2350), key_event_bytes32, sizeof(key_event_bytes32), key_event_hook, (void **)&key_event_original))
 			log_printf("native: key event bytes differ");
-		static const uint8_t hudelem_bytes32[] = {0xa1, 0x50, 0x86, 0x75, 0x00};
-		if (!jhook_function(base + 0x713b0, msgwin_bytes32, sizeof(msgwin_bytes32), msgwin_hook, (void **)&msgwin_original))
+		uint8_t hudelem_bytes32[] = {0xa1, 0x50, 0x86, 0x75, 0x00}; // mov eax, [0x758650]
+#ifdef MW2COOP_IW4X
+		{
+			uint32_t at = XV(0x758650);
+			memcpy(hudelem_bytes32 + 1, &at, 4);
+		}
+#endif
+		if (!jhook_function(base + XR(0x713b0), msgwin_bytes32, sizeof(msgwin_bytes32), msgwin_hook, (void **)&msgwin_original))
 			log_printf("native: game message window draw bytes differ");
-		if (cfg("titles", 1) && !jhook_function(base + 0x164b40, hudelem_bytes32, sizeof(hudelem_bytes32), hudelem_hook, (void **)&hudelem_original))
+		if (cfg("titles", 1) && !jhook_function(base + XR(0x164b40), hudelem_bytes32, sizeof(hudelem_bytes32), hudelem_hook, (void **)&hudelem_original))
 			log_printf("native: HUD element draw bytes differ");
 		if (cfg("namefix", 1)) {
 			static const uint32_t name_site[] = {0x15eaf9};
@@ -4873,7 +4886,7 @@ static int hooks_apply32_contexts(void)
 				log_printf("native: no call at the name loop's name lookup");
 		}
 	}
-	aim_for_client_fn = base + 0x15b040;
+	aim_for_client_fn = base + XR(0x15b040);
 	{ // the aim assist's screen targets of each context's cgame and the server's target list of the client it is (docs/32bit-native-map/aimrumble.md 1.4, 1.5)
 		static const uint32_t screen_site[] = {0x66adc}, list_site[] = {0x88ba8};
 		if (!hook_calls32(screen_site, 1, screen_targets_hook, (void **)&screen_targets_original, "screen targets") ||
@@ -4942,8 +4955,8 @@ static void contexts_install(void)
 	};
 	int enabled = cfg("sites", 0x7fffffff);
 	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
-		if ((enabled & (1 << i)) && !jhook_call(base + sites[i].site, sites[i].hook, sites[i].original))
-			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
+		if ((enabled & (1 << i)) && !jhook_call(base + XR(sites[i].site), sites[i].hook, sites[i].original))
+			log_printf("native: no call at rva 0x%x, context hook %zu off", XR(sites[i].site), i);
 	swap_entities = cfg("swapent", 0); // the old workaround for context 1's "mine" (superseded by ownfix, local_slot_hook)
 	skip_entity = cfg("skipent", 1); // context 1's own entity (player 2) is never drawn by the first pass either
 	log_entities = cfg("entdraw", 0);

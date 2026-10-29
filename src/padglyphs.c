@@ -28,12 +28,12 @@
 #define BINDING_SITE_B 0x1913fa // the scripts' GetKeyBinding
 #else
 // the 32-bit official build (docs/32bit-native-map/inputui.md)
-#define RVA_DB_FIND 0x0f6f10
+#define RVA_DB_FIND XR(0x0f6f10)
 #define MATERIAL_TABLE 0x54
 #define IMAGE_DIMS 0x14
-#define TEXT_DRAW_SITE 0x13919d
-#define BINDING_SITE_A 0x2235f6
-#define BINDING_SITE_B 0x1d51f6
+#define TEXT_DRAW_SITE XR(0x13919d)
+#define BINDING_SITE_A XR(0x2235f6)
+#define BINDING_SITE_B XR(0x1d51f6)
 #endif
 #define ASSET_MATERIAL 5
 #define ICON 64

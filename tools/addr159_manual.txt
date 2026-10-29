@@ -1,0 +1,9 @@
+# Official 32-bit RVA -> 1.0.159 RVA that tools/map159.py cannot find alone (each checked by hand against the bytes around it)
+0x9cb6a -> 0x4871a    # the entity cleanup call that ends a function ("mov [x],0; call; jmp"); the other caller 0x155f2 is the loop of 0x432872
+0xd6794 -> 0x67954    # fuzzy score 1.00; 0xd6774 -> 0x67934 is mapped exactly, the same +0x20
+0x2e9fd0 -> 0x2ecec0    # builtin entry playrumbleonentity (the empty builtin, found by its name)
+0x2e9fdc -> 0x2ececc    # builtin entry playrumblelooponentity (the empty builtin, found by its name)
+0x2e9fe8 -> 0x2eced8    # builtin entry stoprumble (the empty builtin, found by its name)
+0x331aec -> 0x334aec    # builtin entry playrumbleonposition (the empty builtin, found by its name)
+0x331af8 -> 0x334af8    # builtin entry playrumblelooponposition (the empty builtin, found by its name)
+0x331b04 -> 0x334b04    # builtin entry stopallrumbles (the empty builtin, found by its name)
