@@ -862,6 +862,14 @@ static void patch_split_lobby(uint8_t *menu)
 		}
 		if (cards[0] && !kb_material)
 			kb_material = *(uint8_t **)(cards[0] + ITEM_BACKGROUND_PTR);
+#ifndef _WIN64
+		// 32 bits: the card's own material is an opaque placeholder (a black box behind a picture drawn on it); the engine's "white" material blends its alpha, as the hints' pictures do
+		if (cards[0] && cards[1]) {
+			uint8_t *w = ((uint8_t * (*)(int, const char *))(base + RVA_DB_FIND_HEADER))(5, "white");
+			if (w)
+				kb_material = w;
+		}
+#endif
 	}
 	if (title_item)
 		*(const char **)(title_item + ITEM_TEXT) = split ? "@MW2COOP_SPLIT_TITLE" : (const char *)title_native;
