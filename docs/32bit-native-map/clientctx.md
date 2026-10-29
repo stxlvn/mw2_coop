@@ -138,7 +138,7 @@ Two observations about the 64-bit code found on the way: (1) range 0 stops 135 e
 ### The coop slot table is a different object from `clc`; 64-bit 0x545844 (clc[0]) comes after the table, in 32 bits `clc[0]` is [0x88c330, 0x88f548), right before the table (clc[1] would overlap the table).
 
 ### Server client array - 64-bit rva 0x19ada98 stride 0x1678 (RVA_SV_CLIENTS)
-- 32-bit: **VA 0x1b23988 (rva 0x1123988) stride 0x1674**; last usercmd at +0x1630 (VA 0x1b24fb8 + lc * 0x1674, observed in 0x4e7750), the reliable command block `{size at +4, seq at +8, ack at +0xc, text from +0x10}` (0x42d110 passes client_t + 4 to the parser and clears `[+4]`, copies `[+8] -> [+0xc]`... checked in 0x42d110, see the next section for sv_add_command).
+- 32-bit: **VA 0x1b23988 (rva 0x1723988: the first version of this map had 0x1123988) stride 0x1674**; last usercmd at +0x1630 (VA 0x1b24fb8 + lc * 0x1674, observed in 0x4e7750), the reliable command block `{size at +4, seq at +8, ack at +0xc, text from +0x10}` (0x42d110 passes client_t + 4 to the parser and clears `[+4]`, copies `[+8] -> [+0xc]`... checked in 0x42d110, see the next section for sv_add_command).
 - confidence: verified for base, stride and +0x1630
 
 ### Local slot function - 64-bit rva 0xa5ec0 (native.c `local_slot_hook`, 15-byte check `slot_bytes`)

@@ -54,6 +54,64 @@ static uint8_t *base;
 #define CTX_IP(c) ((uintptr_t)(c).Eip)
 #define CTX_SP(c) ((uintptr_t)(c).Esp)
 #endif
+#ifdef _WIN64
+#define RVA_LOCAL_PLAYERS_STORE 0x1714a6
+#define RVA_SV_ADD_COMMAND 0x232c30
+#define RVA_COM_ERROR 0x1fb5f0 // void (int code, const char *format, ...)
+#define RVA_SV_CLIENTS 0x19ada98
+#define SV_CLIENT_STRIDE 0x1678
+#define RVA_COOP_BYTE 0x52fb5c
+#define RVA_LOCAL_PLAYERS 0x3c3eb0
+#define RVA_COOP_SLOTS 0x540bb0 // slot p: type int at +p*0x2650
+#define SLOT_STRIDE 0x2650
+#define RVA_SV_CLIENT_THINK 0x22d000 // void (int lc, const usercmd_t *): copies the cmd into client_t[lc] + 0x1630 and runs the player's think
+#define RVA_KEY_CATCHERS 0x533cb0
+#define RVA_ACC_PITCH 0x533d14 // the live view angle accumulators (pitch, then yaw)
+#define ACC_IN_CLS (0x533d14 - 0x533cb8)
+#define RVA_CG_CLIENTNUM 0x40caa0 // the cgame's copy of the client number; +4: its local client number
+#define RVA_CL_PS 0x535d38 // the live cl block's playerstate
+#define CL_RING_MASK 127
+#define CL_CMDNUM 0x2000
+#define CL_SENT 0x2004
+#define CL_BLOCK_PS 0x2018
+#define RVA_NOPREDICT_DVAR 0x51e028
+#define RVA_FOV_DVAR 0x51e1a8
+#define RVA_DRAWGUN_DVAR 0x51e120
+#define RVA_WAIT_TYPE 0x300a0
+#define RVA_CLIENT_INIT_A 0xb8830 // the per-client parts of the cgame init
+#define RVA_CLIENT_INIT_B 0xb87b0
+#define RVA_COOP_DVAR 0x1905308
+#define MSG_T_SIZE 0x30
+#else
+// the 32-bit official build: docs/32bit-native-map/clientctx.md
+#define RVA_LOCAL_PLAYERS_STORE 0xbf9db
+#define RVA_SV_ADD_COMMAND 0xa550
+#define RVA_COM_ERROR 0x584f0
+#define RVA_SV_CLIENTS 0x1723988
+#define SV_CLIENT_STRIDE 0x1674
+#define RVA_COOP_BYTE 0x48897c
+#define RVA_LOCAL_PLAYERS 0x338c6c
+#define RVA_COOP_SLOTS 0x48f560
+#define SLOT_STRIDE 0x263c
+#define RVA_SV_CLIENT_THINK 0xe7750
+#define RVA_KEY_CATCHERS 0x525bb8
+#define RVA_ACC_PITCH 0x525c34
+#define ACC_IN_CLS (0x525c34 - 0x525bc0)
+#define RVA_CG_CLIENTNUM 0x35f2a0
+#define RVA_CL_PS 0x526c58
+#define CL_RING_MASK 63
+#define CL_CMDNUM 0x1000
+#define CL_SENT 0x1004
+#define CL_BLOCK_PS 0x1018
+#define RVA_NOPREDICT_DVAR 0x45e8e8
+#define RVA_FOV_DVAR 0x45e968
+#define RVA_DRAWGUN_DVAR 0x35efec
+#define RVA_WAIT_TYPE 0x12ac60
+#define RVA_CLIENT_INIT_A 0x1dfa0
+#define RVA_CLIENT_INIT_B 0x956e0
+#define RVA_COOP_DVAR 0x167f0ec
+#define MSG_T_SIZE 0x28
+#endif
 static char settings_path[MAX_PATH];
 static int mode;
 static int second_pass;
@@ -1496,7 +1554,7 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 			const uint8_t *ps = base + 0x422440;
 			const unsigned *d = (const unsigned *)(ps + 0x100);
 			log_printf("native: viewlog ctx %d cg.ps pitch %.1f yaw %.1f roll %.1f | acc pitch %.1f yaw %.1f | cl.ps yaw %.1f | ps+100: %08x %08x %08x %08x %08x %08x %08x %08x", ctx_current,
-				   (double)*(float *)(ps + 0x108), (double)*(float *)(ps + 0x10c), (double)*(float *)(ps + 0x110), (double)*(float *)(base + 0x533d14), (double)*(float *)(base + 0x533d18),
+				   (double)*(float *)(ps + 0x108), (double)*(float *)(ps + 0x10c), (double)*(float *)(ps + 0x110), (double)*(float *)(base + RVA_ACC_PITCH), (double)*(float *)(base + RVA_ACC_PITCH + 4),
 				   (double)*(float *)(base + 0x535d38 + 0x10c), d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
 		}
 	}
@@ -1637,20 +1695,10 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 // G_InitGame stores the number of local players (rva 0x3c3eb0) as the immediate 1 of `mov dword [rip+x], 1` (c7 05 <rel32> 01 00 00 00 at rva 0x1714a6) when the co-op byte is 0.
 // settings.ini [native] players=2 makes it 2: the server then makes two clients and two player entities, with no network and no co-op session. The client side has one
 // element of each array, so this only shows what the server side does alone.
-#define RVA_LOCAL_PLAYERS_STORE 0x1714a6
-// The server's reliable command to a client (rva 0x232c30, SV_AddServerCommand): client_t +4 write offset, +8 sequence, +0xc acknowledge, text at +0x10 (0x1000 bytes), the
-// offset of command n at +0x1010 + (n & 0x7f) * 4. Client 1 of the server has no client behind it yet (nothing acknowledges), so its buffer overflows within seconds
-// and Com_Error ends the level ("Reliable command buffer overflow"); with players=2 and [native] skip_client1=1 its commands are dropped instead.
-#define RVA_SV_ADD_COMMAND 0x232c30
-#define RVA_COM_ERROR 0x1fb5f0 // void (int code, const char *format, ...)
-#define RVA_SV_CLIENTS 0x19ada98
-#define RVA_COOP_BYTE 0x52fb5c
-#define RVA_LOCAL_PLAYERS 0x3c3eb0
-#define RVA_COOP_SLOTS 0x540bb0 // slot p: type int at +p*0x2650
 static void sv_add_command(uint8_t *cl, const char *text)
 {
-	int idx = (int)((cl - (base + RVA_SV_CLIENTS)) / 0x1678);
-	int in_use = *(base + RVA_COOP_BYTE) ? *(int *)(base + RVA_COOP_SLOTS + idx * 0x2650) == 2 : idx < *(int *)(base + RVA_LOCAL_PLAYERS);
+	int idx = (int)((cl - (base + RVA_SV_CLIENTS)) / SV_CLIENT_STRIDE);
+	int in_use = *(base + RVA_COOP_BYTE) ? *(int *)(base + RVA_COOP_SLOTS + idx * SLOT_STRIDE) == 2 : idx < *(int *)(base + RVA_LOCAL_PLAYERS);
 	if (!in_use || (idx == 1 && !*(base + RVA_COOP_BYTE)))
 		return;
 	void (*com_error)(int, const char *, ...) = (void (*)(int, const char *, ...))(base + RVA_COM_ERROR);
@@ -1696,6 +1744,7 @@ static void cbuf_hook(int lc, const char *text)
 typedef struct {
 	uint32_t rva, size;
 } range_t;
+#ifdef _WIN64
 static const range_t ranges[] = {
     {0x404450, 0x44f000 - 0x404450}, // cgs, cg, cg_entities and neighbours
     {0x51b078, 0x51dcb0 - 0x51b078}, // cl snapshots and their pointers
@@ -1707,6 +1756,22 @@ static const range_t ranges[] = {
     {0x548ce8, 8},                   // the snapshot message's time and flag
     {0x3cf180, 0xe80},               // aim assist of local client 0 (aaGlob: the targets on screen, the aim_* regions): each context's cgame fills its own
 };
+#else
+// 32 bits (docs/32bit-native-map/clientctx.md): the same eight kinds of state in the same order (the code indexes them), the cgame block in two parts: [0] is its main part
+// (the first 135 entities included, as in 64 bits) and [9] the view model pointers behind the entity array
+static const range_t ranges[] = {
+    {0x35f280, 0x7a0000 - 0x75f280}, // cgs, cg, media tables, cg_entities 0..134
+    {0x46798c, 0x2c30},              // cl snapshots and their pointers
+    {0x46b180, 0x100},               // cleared by the cgame init for each client
+    {0x4889b0, 0x21c},               // input
+    {0x525bc0, 0x80},                // cls state, the mouse state and the view angle accumulators (0x925c34 pitch, 0x925c38 yaw)
+    {0x525c40, 0xbe3c},              // cl: usercmd ring (64 deep), cmdNumber, playerstate (+0x1018), packet history
+    {0x48c330, 0x3218},              // clc: reliable command ring
+    {0x494424, 8},                   // the snapshot message's time and flag
+    {0x33ba90, 0xe80},               // aim assist of local client 0 (aaGlob)
+    {0x45e8a4, 0x2c},                // the cgame's view model pointers (2 hands x 0x14)
+};
+#endif
 #define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
 static uint8_t *ctx_store[2][NRANGES];
 static int ctx_current;
@@ -1738,7 +1803,7 @@ static void ctx_wait_workers(void)
 		on = cfg("workerwait", 1);
 	if (!on)
 		return;
-	void (*wait_type)(int) = (void (*)(int))(base + 0x300a0);
+	void (*wait_type)(int) = (void (*)(int))(base + RVA_WAIT_TYPE);
 	LONGLONG t0 = perf_now();
 	for (int t = 0; t <= 18; t++)
 		wait_type(t);
@@ -1781,9 +1846,9 @@ static void ctx_seed_cgame(void)
 	// the playerstate the server published for client 1, which is its own.
 	for (size_t i = 0; i < NRANGES; i++) {
 		uint8_t *live = base + ranges[i].rva;
-		if (i == 5) { // the cl block: everything but the playerstate at +0x2018
-			memcpy(ctx_store[1][i], live, 0x2018);
-			memcpy(ctx_store[1][i] + 0x2018 + 0xaca4, live + 0x2018 + 0xaca4, ranges[i].size - 0x2018 - 0xaca4);
+		if (i == 5) { // the cl block: everything but the playerstate at +0x2018 (32 bits: +0x1018)
+			memcpy(ctx_store[1][i], live, CL_BLOCK_PS);
+			memcpy(ctx_store[1][i] + CL_BLOCK_PS + 0xaca4, live + CL_BLOCK_PS + 0xaca4, ranges[i].size - CL_BLOCK_PS - 0xaca4);
 		} else {
 			memcpy(ctx_store[1][i], live, ranges[i].size);
 		}
@@ -1864,11 +1929,6 @@ static void client_n_install(void)
 	FlushInstructionCache(GetCurrentProcess(), base, 0xe0000);
 	log_printf("native: %d of %d client reads of the local player count point at a copy (1)", done, (int)(sizeof(client_n_sites) / sizeof(client_n_sites[0])));
 }
-#else
-static void client_n_install(void)
-{
-	log_printf("native: client_n_install is not ported to the 32-bit build yet");
-}
 #endif
 
 // The server's entity list for the snapshot leaves out the local players' entities (they are fed through the playerstate); with two local players each context would never see the other
@@ -1895,15 +1955,10 @@ static void list_players_install(void)
 	FlushInstructionCache(GetCurrentProcess(), site, 8);
 	log_printf("native: the entity list keeps the local players' entities");
 }
-#else
-static void list_players_install(void)
-{
-	log_printf("native: list_players_install is not ported to the 32-bit build yet");
-}
 #endif
 
 static void (*ps_publish_original)(unsigned, const void *);
-static void (*server_cmds_original)(unsigned long long, int *);
+static void (*server_cmds_original)(uintptr_t, int *);
 static void (*usercmd_step_original)(int);
 static void (*snapshot_msg_original)(void *, int);
 static void (*cg_init_all_original)(void);
@@ -2042,7 +2097,11 @@ static void snapshot_take_hook(void)
 // So its init runs a few frames after context 0's, from its first frame's hook, from a copy of context 0's block.
 static void ctx_dump(const char *what)
 {
+#ifdef _WIN64
 	static const uint32_t probes[] = {0x422434, 0x40caa0, 0x40cad0, 0x40cad8, 0x40cab8, 0x422440};
+#else
+	static const uint32_t probes[] = {0x374c20, 0x35f2a0, 0x35f2c8, 0x35f2bc, 0x35f2b8, 0x374c2c}; // cg.time, the cgame's client numbers and pointers, cg.ps
+#endif
 	uint8_t *r1_live = base + ranges[0].rva;
 	uint8_t *r1 = ctx_current == 0 && ctx_store[1][0] ? ctx_store[1][0] : r1_live;
 	char line[400];
@@ -2150,27 +2209,31 @@ static void ctx_after_draw(void)
 		return;
 	log_printf("native: starting context 1");
 	ctx_seed_cgame();
+#ifdef _WIN64
 	memset(ctx_store[1][0] + (0x440730 - ranges[0].rva), 0, 0x40); // context 1 makes its own view model (see viewmodel_setup_hook)
+#else
+	memset(ctx_store[1][9], 0, ranges[9].size); // (32 bits: the view model pointers are a range of their own)
+#endif
 	if (cfg("p1cmd", 0)) {
 		// player 1's view: the view angle accumulators (pitch 0x533d14, yaw 0x533d18, degrees) of context 1's block; the server turns them into his view with the
 		// angles it set at his spawn, so this is relative to that (player 1 stood at yaw -77 with 0): [native] p1yaw=<degrees>
-		float *acc = (float *)(ctx_store[1][4] + (0x533d14 - 0x533cb8));
+		float *acc = (float *)(ctx_store[1][4] + ACC_IN_CLS);
 		acc[0] = 0;
 		acc[1] = (float)cfg("p1yawdeg", 60);
 	}
 	if (cfg("p1cmd", 0)) {
 		// and player 0's: turned once by [native] p0turn degrees (default 241: from the spawn yaw -78 to the direction of player 1, 163) through his own view angle accumulator
-		float *acc0 = (float *)(base + 0x533d14);
+		float *acc0 = (float *)(base + RVA_ACC_PITCH);
 		acc0[1] += (float)cfg("p0turn", 241);
 	}
 	ctx_swap(1);
 	// not the whole cgame init (it also resets what is shared: effects, media, the renderer's per-level state): only its two per-client parts, on the copied block
-	((void (*)(unsigned long long))(base + 0xb8830))(0);
-	((void (*)(unsigned))(base + 0xb87b0))(0);
+	((void (*)(int))(base + RVA_CLIENT_INIT_A))(0);
+	((void (*)(int))(base + RVA_CLIENT_INIT_B))(0);
 	ctx_swap(0);
 	// the cgame's own idea of its local client number (rva 0x40caa4): the draw hides "my" entity by it and answers per-client visibility masks by it; context 1 runs as local client 0
 	// but is client 1
-	*(int *)(ctx_store[1][0] + (0x40caa4 - ranges[0].rva)) = cfg("ctx1lc", 1);
+	*(int *)(ctx_store[1][0] + ((RVA_CG_CLIENTNUM + 4) - ranges[0].rva)) = cfg("ctx1lc", 1);
 	ctx1_ready = 1;
 	log_printf("native: context 1 initialised");
 	ctx_dump("after init");
@@ -2178,7 +2241,6 @@ static void ctx_after_draw(void)
 
 // The server's copy of a local player's playerstate into the cl block (rva 0x535d38 is +0x2018 into the block at 0x533d20): for client 1 straight into context 1's copy, so no other thread
 // ever sees a swapped block for it.
-#define CL_BLOCK_PS 0x2018
 #define PS_SIZE 0xaca4
 static void ps_publish_hook(unsigned lc, const void *ps)
 {
@@ -2186,11 +2248,11 @@ static void ps_publish_hook(unsigned lc, const void *ps)
 		return ps_publish_original(0, ps);
 	ctx_ensure();
 	// the playerstate of client lc belongs to context lc: into the live block when that context is the live one, else into its stored copy
-	uint8_t *dest = (int)lc == ctx_current ? base + 0x535d38 : ctx_store[lc][5] + CL_BLOCK_PS;
+	uint8_t *dest = (int)lc == ctx_current ? base + RVA_CL_PS : ctx_store[lc][5] + CL_BLOCK_PS;
 	memcpy(dest, ps, PS_SIZE);
 }
 
-static void server_cmds_hook(unsigned long long lc, int *msg)
+static void server_cmds_hook(uintptr_t lc, int *msg)
 {
 	if ((int)lc != 0)
 		return; // client 1 gets no server commands yet
@@ -2208,7 +2270,7 @@ static void snapshot_msg_hook(void *msg, int time)
 	int was = ctx_current;
 	if (was)
 		ctx_swap(0);
-	uint8_t copy[0x30];
+	uint8_t copy[MSG_T_SIZE]; // the engine's msg_t: 0x30 bytes in 64 bits, 0x28 in 32
 	memcpy(copy, msg, sizeof(copy));
 	snapshot_msg_original(msg, time);
 	if (ctx1_ready) {
@@ -2410,6 +2472,9 @@ static const uint8_t *dobj_model_names(const uint8_t *dobj, const char *out[8], 
 }
 static void body_dobj_sync(void)
 {
+#ifndef _WIN64
+	return; // 32 bits: the entity part of the port comes later (docs/32bit-native-map/entities.md)
+#endif
 	static DWORD at;
 	if (!native_active || ctx_current != 0 || !CFG_ONCE("bodysync", 1) || GetTickCount() - at < 200)
 		return;
@@ -2675,7 +2740,7 @@ static void pad_frame_player(int pl, int play)
 		return;
 	}
 	p->active = 1;
-	if (*(unsigned *)(base + 0x533cb0) & 0x10) { // a menu: player 1 works it; player 2 only pauses the game (Start in play), he does not work the menus
+	if (*(unsigned *)(base + RVA_KEY_CATCHERS) & 0x10) { // a menu: player 1 works it; player 2 only pauses the game (Start in play), he does not work the menus
 		if (pl == 0)
 			pad_menu(pl, &st);
 		p->forward = p->right = 0;
@@ -2707,7 +2772,7 @@ static void pad_frame_player(int pl, int play)
 		aim_assist(pl, dt, &yaw, &pitch, sqrtf(lx * lx + ly * ly), sqrtf(rx * rx + ry * ry), lt);
 	else
 		aa_state[pl].lock_ent = aa_state[pl].snap_ent = -1, aa_state[pl].ads_was = lt;
-	float *acc = (float *)(base + 0x533d14); // the live context's
+	float *acc = (float *)(base + RVA_ACC_PITCH); // the live context's
 	acc[1] += yaw;
 	acc[0] += pitch;
 	if (acc[0] > 85.0f)
@@ -2770,6 +2835,9 @@ static float place_saved[3][28];
 static int place_pushed;
 static void place_push(void)
 {
+#ifndef _WIN64
+	return; // 32 bits: the 2D placement of the title lines comes with mode 10
+#endif
 	if (!comp_w || !comp_h)
 		return;
 	float w = (float)comp_w, h = (float)(comp_h / 2), s = h / 480.0f, vw = w / s;
@@ -2807,6 +2875,9 @@ static void place_push(void)
 }
 static void place_pop(void)
 {
+#ifndef _WIN64
+	return;
+#endif
 	if (!place_pushed)
 		return;
 	for (int n = 0; n < 3; n++)
@@ -2880,10 +2951,10 @@ static void client_frame_hook(void)
 		perf_report();
 	}
 	{ // the scripts' switch: the dvar mw2coop_split_view is "1" once the intro is over
-		uint8_t *d = ((uint8_t * (*)(const char *))(base + 0x26bdf0))("mw2coop_split_view");
+		uint8_t *d = (uint8_t *)game_find_dvar("mw2coop_split_view");
 		const char *v = d ? *(const char **)(d + 0x10) : NULL;
 		int on = v && v[0] == '1';
-		if (*(unsigned *)(base + 0x533cb0) & 0x11) // key catchers of client 0 (rva 0x533cb0, set by 0xd1c10): a menu (pause, objectives, end of game) or the console has the keys: one picture
+		if (*(unsigned *)(base + RVA_KEY_CATCHERS) & 0x11) // key catchers of client 0 (rva 0x533cb0, set by 0xd1c10): a menu (pause, objectives, end of game) or the console has the keys: one picture
 			on = 0;
 		if (on != split_on)
 			log_printf("native: split view %s", on ? "on" : "off");
@@ -2913,14 +2984,14 @@ static void client_frame_hook(void)
 	static int nopredict = -1;
 	if (nopredict < 0)
 		nopredict = cfg("nopredict", 0);
-	uint8_t *np_dvar = *(uint8_t **)(base + 0x51e028); // cg_nopredict: context 1 shows the server's playerstate as it is (its own prediction fought the server)
+	uint8_t *np_dvar = *(uint8_t **)(base + RVA_NOPREDICT_DVAR); // cg_nopredict: context 1 shows the server's playerstate as it is (its own prediction fought the server)
 	{ // [native] fov=<degrees>: the cg_fov (rva 0x51e1a8 holds the dvar; the angle across a 4:3 picture, 65 by default) while the picture is split: each half is a band of the full
 	  // view (mode 6), so the field is widened to make up for the half height
 		static int fov = -1;
 		static float fov_saved = -1;
 		if (fov < 0)
 			fov = cfg("fov", (mode >= 8) ? 49 : 85); // 85 = the console split screen: cg_fovScale 0.75 (maps/_load.gsc) on a half of 16:9 is about 100 x 38 degrees; a band of half the height cut from a view with cg_fov 85 is the same
-		uint8_t *d = *(uint8_t **)(base + 0x51e1a8);
+		uint8_t *d = *(uint8_t **)(base + RVA_FOV_DVAR);
 		if (fov > 0 && d) {
 			float *v = (float *)(d + 0x10);
 			if (split_on) {
@@ -2936,7 +3007,7 @@ static void client_frame_hook(void)
 	static int nogun = -1;
 	if (nogun < 0)
 		nogun = cfg("nogun", 0);
-	uint8_t *gun_dvar = *(uint8_t **)(base + 0x51e120); // cg_drawGun
+	uint8_t *gun_dvar = *(uint8_t **)(base + RVA_DRAWGUN_DVAR); // cg_drawGun
 	if (mode >= 5 && ctx1_ready && split_on && (frame++ & 1)) {
 		frame_bottom = 1;
 		if (nogun && gun_dvar)
@@ -3024,8 +3095,16 @@ static float wait_alpha_hook(int lc)
 
 // Context 1 has no mouse (its player has no device yet): the engine's mouse and joystick reads (rva 0xcf4b0, called at 0xcfd23 and 0xd0061) return no movement for it, so the
 // real cursor only turns player 0.
-static void (*mouse_read_original)(long long, float *, float *);
-static void mouse_read_hook(long long state, float *x, float *y)
+#ifdef _WIN64
+static void (*mouse_read_original)(intptr_t, float *, float *);
+#else
+// 32 bits: the mouse read has the mouse state in ESI and two stack arguments (the caller cleans them): a stub below passes plain cdecl arguments to the hook,
+// and the original is called through a wrapper that sets ESI (docs/32bit-native-map/clientctx.md)
+static void *mouse_read_target, *mouse_read2_target;
+static void mouse_read_original(intptr_t state, float *x, float *y);
+static void mouse_read2_original(intptr_t state, float *x, float *y);
+#endif
+static void mouse_read_hook(intptr_t state, float *x, float *y)
 {
 	if (ctx_current != (native_active ? kb_player() : 0)) { // not the mouse's player (left unread: it stays for his context)
 		*x = 0;
@@ -3034,8 +3113,10 @@ static void mouse_read_hook(long long state, float *x, float *y)
 	}
 	mouse_read_original(state, x, y);
 }
-static void (*mouse_read2_original)(long long, float *, float *);
-static void mouse_read2_hook(long long state, float *x, float *y)
+#ifdef _WIN64
+static void (*mouse_read2_original)(intptr_t, float *, float *);
+#endif
+static void mouse_read2_hook(intptr_t state, float *x, float *y)
 {
 	if (ctx_current != (native_active ? kb_player() : 0)) { // not the mouse's player (left unread: it stays for his context)
 		*x = 0;
@@ -3050,7 +3131,7 @@ static void mouse_read2_hook(long long state, float *x, float *y)
 static void (*key_event_original)(int, int, int, unsigned);
 static void key_event_hook(int lc, int key, int down, unsigned time)
 {
-	unsigned catchers = *(unsigned *)(base + 0x533cb0);
+	unsigned catchers = *(unsigned *)(base + RVA_KEY_CATCHERS);
 	if (native_active && kb_player() == 1 && (catchers & 0x10) && !(catchers & 0x1) && down)
 		return;
 	if (native_active && kb_player() == 1 && ctx1_ready && ctx_current == 0 && !(catchers & 0x11)) {
@@ -3064,7 +3145,13 @@ static void key_event_hook(int lc, int key, int down, unsigned time)
 
 // The keyboard and the pad reach context 1 too (the keys are read by the same input code): its usercmd, made by 0xd03a0 (called at 0xcf8b1), loses its buttons and movement,
 // so that the player who has no device stands still and his prediction agrees with the server.
+#ifdef _WIN64
 static uint8_t *(*make_cmd_original)(uint8_t *, int);
+#else
+// 32 bits: the usercmd maker takes its output buffer in EAX and the local client in EBX and returns the buffer in EAX
+static void *make_cmd_target;
+static uint8_t *make_cmd_original(uint8_t *out, int lc);
+#endif
 static volatile int qa_c0_fwd, qa_c0_fire; // QA (console mw2coop_qa_move <forward 0|1> <fire 0|1>): player 0's movement and trigger set straight in his usercmds
 static uint8_t *make_cmd_hook(uint8_t *out, int a)
 {
@@ -3121,7 +3208,6 @@ static void server_step_hook(void)
 
 // Player 1 (local client 1) has no input device yet: every simulation step he gets the usercmd of player 0 with the buttons and the movement cleared and the view turned by
 // [native] p1yaw (a 16-bit angle, 0x8000 = half a turn), through the engine's own SV_ClientThink analogue (rva 0x22d000, client_t[n] + 0x1630 holds the last cmd).
-#define RVA_SV_CLIENTS_CMD 0x19ada98
 static int p1_yaw;
 static void usercmd_step_inner(int lc)
 {
@@ -3134,7 +3220,7 @@ static void usercmd_step_inner(int lc)
 	{
 		static unsigned seen;
 		if (++seen % 10 == 0 && seen < 3000) {
-			const uint8_t *c0 = base + RVA_SV_CLIENTS_CMD + 0x1630, *c1 = base + RVA_SV_CLIENTS_CMD + 0x1678 + 0x1630;
+			const uint8_t *c0 = base + RVA_SV_CLIENTS + 0x1630, *c1 = base + RVA_SV_CLIENTS + SV_CLIENT_STRIDE + 0x1630;
 			log_printf("native: step %u ctx %d: client 0 cmd t %d yaw %d pitch %d | client 1 cmd t %d yaw %d pitch %d | ctx1 acc yaw %.1f pitch %.1f", seen, ctx_current, *(int *)c0, *(int *)(c0 + 12),
 				   *(int *)(c0 + 8), *(int *)c1, *(int *)(c1 + 12), *(int *)(c1 + 8), ctx_store[1][4] ? *(float *)(ctx_store[1][4] + 0x60) : -1.0f,
 				   ctx_store[1][4] ? *(float *)(ctx_store[1][4] + 0x5c) : -1.0f);
@@ -3144,18 +3230,18 @@ static void usercmd_step_inner(int lc)
 		// context 1's own client frame makes its usercmds in its cl block (ring of 128 x 0x40 at +0, cmdNumber at +0x2000, the number sent at +0x2004): player 1 gets them
 		// through the engine's SV_ClientThink analogue, as player 0 gets his through rva 0xd02a0
 		uint8_t *cl = ctx_store[1][5];
-		int number = *(int *)(cl + 0x2000);
-		int *sent = (int *)(cl + 0x2004);
+		int number = *(int *)(cl + CL_CMDNUM);
+		int *sent = (int *)(cl + CL_SENT);
 		if (number - *sent > 32)
 			*sent = number - 32;
 		for (int n = *sent + 1; n <= number; n++)
-			((void (*)(int, void *))(base + 0x22d000))(1, cl + (n & 127) * 0x40);
+			((void (*)(int, void *))(base + RVA_SV_CLIENT_THINK))(1, cl + (n & CL_RING_MASK) * 0x40);
 		*sent = number;
 		return;
 	}
 	static int logged;
 	uint8_t cmd[0x40];
-	memcpy(cmd, base + RVA_SV_CLIENTS_CMD + 0x1630, sizeof(cmd)); // player 0's last cmd
+	memcpy(cmd, base + RVA_SV_CLIENTS + 0x1630, sizeof(cmd)); // player 0's last cmd
 	if (!*(int *)cmd) // not set yet
 		return;
 	static unsigned steps;
@@ -3175,7 +3261,7 @@ static void usercmd_step_inner(int lc)
 	*(int *)(cmd + 8) = 0; // a fixed view (pitch 0, yaw p1yaw, roll 0): player 0's mouse must not turn player 1
 	*(int *)(cmd + 12) = p1_yaw;
 	*(int *)(cmd + 16) = 0;
-	((void (*)(int, void *))(base + 0x22d000))(1, cmd);
+	((void (*)(int, void *))(base + RVA_SV_CLIENT_THINK))(1, cmd);
 }
 
 // These server-side hand-overs can be reached while context 1 is the live one (they run from inside the client frame): they always run with context 0 live.
@@ -3231,7 +3317,7 @@ static double lag_now(void)
 static float lag_acc_of(int k)
 {
 	if (ctx_current == k)
-		return *(float *)(base + 0x533d18);
+		return *(float *)(base + RVA_ACC_PITCH + 4);
 	return ctx_store[k][4] ? *(float *)(ctx_store[k][4] + 0x60) : 0.0f;
 }
 static float lag_wrap(float d)
@@ -4141,6 +4227,201 @@ static void aim_targets_update(void)
 	}
 }
 
+#ifndef _WIN64
+// ---- 32 bits: the stubs the register-convention hooks go through, and the wrappers that call the originals (a C function cannot receive ESI or EAX/EBX)
+void n32_mouse_hook(intptr_t state, float *x, float *y);
+void n32_mouse2_hook(intptr_t state, float *x, float *y);
+uint8_t *n32_make_cmd_hook(uint8_t *out, int lc);
+void n32_mouse_hook(intptr_t state, float *x, float *y)
+{
+	mouse_read_hook(state, x, y);
+}
+void n32_mouse2_hook(intptr_t state, float *x, float *y)
+{
+	mouse_read2_hook(state, x, y);
+}
+uint8_t *n32_make_cmd_hook(uint8_t *out, int lc)
+{
+	return make_cmd_hook(out, lc);
+}
+__asm__(".text\n"
+	".globl _n32_mouse_stub\n"
+	"_n32_mouse_stub:\n"
+	"	pushl 8(%esp)\n"
+	"	pushl 8(%esp)\n"
+	"	pushl %esi\n"
+	"	call _n32_mouse_hook\n"
+	"	addl $12, %esp\n"
+	"	ret\n"
+	".globl _n32_mouse2_stub\n"
+	"_n32_mouse2_stub:\n"
+	"	pushl 8(%esp)\n"
+	"	pushl 8(%esp)\n"
+	"	pushl %esi\n"
+	"	call _n32_mouse2_hook\n"
+	"	addl $12, %esp\n"
+	"	ret\n"
+	".globl _n32_make_cmd_stub\n"
+	"_n32_make_cmd_stub:\n"
+	"	pushl %ebx\n"
+	"	pushl %eax\n"
+	"	call _n32_make_cmd_hook\n"
+	"	addl $8, %esp\n"
+	"	ret\n");
+extern char n32_mouse_stub[], n32_mouse2_stub[], n32_make_cmd_stub[];
+static void mouse_read_original(intptr_t state, float *x, float *y)
+{
+	__asm__ volatile("pushl %3\n\tpushl %2\n\tcall *%1\n\taddl $8, %%esp" : : "S"(state), "r"(mouse_read_target), "r"(x), "r"(y) : "eax", "ecx", "edx", "memory", "cc");
+}
+static void mouse_read2_original(intptr_t state, float *x, float *y)
+{
+	__asm__ volatile("pushl %3\n\tpushl %2\n\tcall *%1\n\taddl $8, %%esp" : : "S"(state), "r"(mouse_read2_target), "r"(x), "r"(y) : "eax", "ecx", "edx", "memory", "cc");
+}
+static uint8_t *make_cmd_original(uint8_t *out, int lc)
+{
+	uint8_t *r;
+	__asm__ volatile("call *%2" : "=a"(r) : "a"(out), "r"(make_cmd_target), "b"(lc) : "ecx", "edx", "memory", "cc");
+	return r;
+}
+
+// the client-side count-of-local-players reads (docs/32bit-native-map/clientctx.md): VA, instruction length, offset of the absolute address
+static const struct {
+	uint32_t va;
+	uint8_t length, disp;
+} client_n_sites32[] = {
+	{0x4818b9, 5, 1}, {0x43a926, 6, 2}, {0x55b7fa, 6, 2}, {0x55ea88, 6, 2}, {0x41685e, 6, 2}, {0x433f9a, 6, 2}, {0x434159, 6, 2}, {0x4341eb, 6, 2},
+	{0x4342b4, 6, 2}, {0x434327, 6, 2}, {0x434378, 6, 2}, {0x56558b, 6, 2}, {0x5656be, 6, 2}, {0x4b74ed, 6, 2}, {0x454cb9, 6, 2}, {0x4b5594, 6, 2},
+	{0x4978b4, 6, 2}, {0x497a44, 6, 2}, {0x497ac4, 6, 2}, {0x48190a, 6, 2}, {0x56e414, 6, 2}, {0x570bf9, 6, 2}, {0x4893d2, 6, 2}, {0x4e7632, 6, 2},
+	{0x4b5062, 6, 2}, {0x471a64, 6, 2}, {0x471ae4, 6, 2}, {0x471b47, 6, 2}, {0x4da584, 6, 2}, {0x428666, 6, 2}, {0x4286ba, 6, 2}, {0x430868, 6, 2},
+	{0x43282c, 6, 2}, {0x432888, 6, 2}, {0x4790ab, 6, 2},
+};
+static int32_t n_client_copy; // what the client code reads instead of the number of local players: the engine's own count, but 1 once a split level has started
+static int32_t n_zero_copy;       // what the server's entity list reads (a count of 0: no local player is left out)
+static void absolute_patch(uint8_t *site, int disp, const void *to)
+{
+	DWORD prot;
+	j_save(site, 8);
+	VirtualProtect(site, 8, PAGE_EXECUTE_READWRITE, &prot);
+	uint32_t v = (uint32_t)(uintptr_t)to;
+	memcpy(site + disp, &v, 4);
+	VirtualProtect(site, 8, prot, &prot);
+	FlushInstructionCache(GetCurrentProcess(), site, 8);
+}
+// QA ([native] countwatch=1): every write to the engine's local player count, found with a hardware data breakpoint on all threads (the log says which instruction wrote it)
+static volatile int32_t count_seen;
+static LONG CALLBACK count_veh(EXCEPTION_POINTERS *ep)
+{
+	if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP)
+		return EXCEPTION_CONTINUE_SEARCH;
+	CONTEXT *c = ep->ContextRecord;
+	if (!(c->Dr6 & 1))
+		return EXCEPTION_CONTINUE_SEARCH;
+	c->Dr6 = 0;
+	int32_t v = *(volatile int32_t *)(base + RVA_LOCAL_PLAYERS);
+	log_printf("native: write to the local player count by eip %p (rva 0x%x), value now %d, copy %d", (void *)(uintptr_t)c->Eip, (unsigned)((uintptr_t)c->Eip - (uintptr_t)base), (int)v, (int)n_client_copy);
+	return EXCEPTION_CONTINUE_EXECUTION;
+}
+static DWORD WINAPI count_watch(LPVOID unused)
+{
+	(void)unused;
+	AddVectoredExceptionHandler(1, count_veh);
+	for (int round = 0; round < 40; round++) {
+		HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+		THREADENTRY32 te;
+		te.dwSize = sizeof(te);
+		for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+			if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == GetCurrentThreadId())
+				continue;
+			HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, te.th32ThreadID);
+			if (!th)
+				continue;
+			if (SuspendThread(th) != (DWORD)-1) {
+				CONTEXT ctx;
+				memset(&ctx, 0, sizeof(ctx));
+				ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+				if (GetThreadContext(th, &ctx) && ctx.Dr0 != (DWORD)(uintptr_t)(base + RVA_LOCAL_PLAYERS)) {
+					ctx.Dr0 = (DWORD)(uintptr_t)(base + RVA_LOCAL_PLAYERS);
+					ctx.Dr7 = (ctx.Dr7 & ~0xf0003u) | 1u | (1u << 16) | (3u << 18); // Dr0 enabled, write, 4 bytes
+					SetThreadContext(th, &ctx);
+				}
+				ResumeThread(th);
+			}
+			CloseHandle(th);
+		}
+		CloseHandle(snap);
+		Sleep(500);
+	}
+	return 0;
+}
+static void client_n_install(void)
+{
+	if (cfg("countwatch", 0))
+		CreateThread(NULL, 0, count_watch, NULL, 0, NULL);
+	int done = 0;
+	int lo = cfg("n32lo", 0), hi = cfg("n32hi", 999); // QA bisect
+	n_client_copy = *(int32_t *)(base + RVA_LOCAL_PLAYERS); // what the engine has now (see players_apply)
+	for (size_t i = 0; i < sizeof(client_n_sites32) / sizeof(client_n_sites32[0]); i++) {
+		if ((int)i < lo || (int)i > hi)
+			continue;
+		uint8_t *site = (uint8_t *)(uintptr_t)client_n_sites32[i].va - 0x400000 + (uintptr_t)base;
+		uint32_t at;
+		memcpy(&at, site + client_n_sites32[i].disp, 4);
+		if (at != (uint32_t)(uintptr_t)(base + RVA_LOCAL_PLAYERS))
+			continue; // not the instruction the build has
+		absolute_patch(site, client_n_sites32[i].disp, cfg("n32noop", 0) ? (const void *)(base + RVA_LOCAL_PLAYERS) : (const void *)&n_client_copy);
+		done++;
+	}
+	log_printf("native: %d of %d client reads of the local player count point at a copy (%d now)", done, (int)(sizeof(client_n_sites32) / sizeof(client_n_sites32[0])), (int)n_client_copy);
+}
+static void list_players_install(void)
+{
+	uint8_t *site = base + 0x25cc10; // mov ebp, [count] in the entity list of the snapshot: the local players' own entities stay out of it
+	uint32_t at;
+	memcpy(&at, site + 2, 4);
+	if (site[0] != 0x8b || site[1] != 0x2d || at != (uint32_t)(uintptr_t)(base + RVA_LOCAL_PLAYERS)) {
+		log_printf("native: entity list patch: unexpected code");
+		return;
+	}
+	absolute_patch(site, 2, &n_zero_copy);
+}
+
+static int hooks_apply32_contexts(void)
+{
+	static const struct {
+		uint32_t site;
+		void *hook;
+		void **original;
+	} sites[] = {
+		{0x7af60, cg_init_all_hook, (void **)&cg_init_all_original},
+		{0x55484, snapshot_take_hook, (void **)&snapshot_take_original},
+		{0x25cab8, ps_publish_hook, (void **)&ps_publish_original},
+		{0x2d155, server_cmds_hook, (void **)&server_cmds_original},
+		{0xd6794, usercmd_step_hook, (void **)&usercmd_step_original},
+		{0x25ccfa, snapshot_msg_hook, (void **)&snapshot_msg_original},
+		{0x96dd7, client_frame_hook, (void **)&client_frame_original},
+		{0x179be9, n32_make_cmd_stub, &make_cmd_target},
+		{0x59d6c, server_step_hook, (void **)&server_step_original},
+		{0x179000, n32_mouse_stub, &mouse_read_target},
+		{0x1799e8, n32_mouse2_stub, &mouse_read2_target},
+	};
+	for (size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); i++)
+		if (!jhook_call(base + sites[i].site, sites[i].hook, sites[i].original)) {
+			log_printf("native: no call at rva 0x%x, context hook %zu off", sites[i].site, i);
+			return 0;
+		}
+	swap_entities = cfg("swapent", 0);
+	skip_entity = cfg("skipent", 1);
+	log_entities = cfg("entdraw", 0);
+	p1pad = cfg("p1pad", -1);
+	pad_dev[0] = cfg("p0pad", -1);
+	skip_hud_mask = cfg("skiphud", 0);
+	skip_ctx = cfg("skipctx", 1);
+	ctx_on = 1;
+	log_printf("native: 32-bit client contexts on (call sites redirected)");
+	return 1;
+}
+#endif
+
 static void contexts_install(void)
 {
 	static const struct {
@@ -4235,7 +4516,7 @@ static DWORD WINAPI coop_dvar_thread(LPVOID unused)
 {
 	(void)unused;
 	for (;;) {
-		uint8_t *dvar = *(uint8_t **)(base + 0x1905308);
+		uint8_t *dvar = *(uint8_t **)(base + RVA_COOP_DVAR);
 		if (dvar && coopdvar_on)
 			*(int *)(dvar + 0x10) = 1;
 		Sleep(20);
@@ -4256,6 +4537,7 @@ static int players_apply(int n)
 	}
 	DWORD old;
 	jgroup = 1;
+#ifdef _WIN64
 	j_save(at + 6, 1);
 	if (!VirtualProtect(at + 6, 1, PAGE_EXECUTE_READWRITE, &old)) {
 		log_printf("native: VirtualProtect failed (%lu)", GetLastError());
@@ -4264,8 +4546,43 @@ static int players_apply(int n)
 	}
 	at[6] = (uint8_t)n;
 	VirtualProtect(at + 6, 1, old, &old);
+#else
+	(void)old;
+	// 32 bits: the count is 0 until the first level starts (the menus run with 0), so the client's copy cannot simply be 1: it starts as what the engine has now and becomes 1 where
+	// G_InitGame stores the count. The store (mov dword [count], 1) becomes a jump to code that stores n there and 1 in the copy.
+	{
+		uint32_t count_at = (uint32_t)(uintptr_t)(base + RVA_LOCAL_PLAYERS), copy_at = (uint32_t)(uintptr_t)&n_client_copy;
+		uint32_t nn = (uint32_t)n;
+		uint8_t cave[25] = {0xc7, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0xc7, 0x05, 0, 0, 0, 0, 1, 0, 0, 0, 0xe9, 0, 0, 0, 0};
+		memcpy(cave + 2, &count_at, 4);
+		memcpy(cave + 6, &nn, 4);
+		memcpy(cave + 12, &copy_at, 4);
+		uint8_t *stub = hook_code(cave, sizeof(cave));
+		if (!stub) {
+			jgroup = 0;
+			return 0;
+		}
+		// the jump back is relative to where the page is: build it in place
+		DWORD o2;
+		VirtualProtect(stub, sizeof(cave), PAGE_EXECUTE_READWRITE, &o2);
+		int32_t rel = (int32_t)((uintptr_t)(at + 10) - (uintptr_t)(stub + 25));
+		memcpy(stub + 21, &rel, 4);
+		VirtualProtect(stub, sizeof(cave), PAGE_EXECUTE_READ, &o2);
+		FlushInstructionCache(GetCurrentProcess(), stub, sizeof(cave));
+		if (!(cfg("n32skip", 0) & 1))
+			jhook_jump(at, 10, stub, 0x90);
+	}
+#endif
 	log_printf("native: the number of local players is %d (patched G_InitGame)", n);
+#ifdef _WIN64
 	jhook_jump(base + RVA_SV_ADD_COMMAND, 14, sv_add_command, 0xcc);
+#else
+	if (!(cfg("n32skip", 0) & 2))
+		jhook_jump(base + RVA_SV_ADD_COMMAND, 5, sv_add_command, 0xcc);
+#endif
+#ifndef _WIN64
+	if (!(cfg("n32skip", 0) & 4))
+#endif
 	client_n_install();
 	if (cfg("listplayers", 0))
 		list_players_install();
@@ -4275,6 +4592,10 @@ static int players_apply(int n)
 }
 
 // The hooks of the client side: installed once, they pass everything through while native_active is 0 (journal group 0)
+#ifndef _WIN64
+static int hooks_apply32_contexts(void);
+static DWORD WINAPI coop_dvar_thread(LPVOID unused);
+#endif
 #ifndef _WIN64
 // The 32-bit port, step 1 (docs/32bit-native-map/): mode 2 only, the alternate frames and the compositor with the one player in both halves: [native] experiment=2 in settings.ini.
 static int hooks_apply32(void)
@@ -4289,6 +4610,10 @@ static int hooks_apply32(void)
 		log_printf("native: unexpected code at the cgame draw or its begin-frame call, the 32-bit split screen is off");
 		return 0;
 	}
+	if (cfg("experiment", 0) >= 5 && cfg("ctx", 1) && !hooks_apply32_contexts())
+		return 0;
+	if (cfg("experiment", 0) >= 5)
+		CreateThread(NULL, 0, coop_dvar_thread, NULL, 0, NULL);
 	hooks_ok = 1;
 	return 1;
 }
@@ -4349,6 +4674,10 @@ static int activate(int players)
 		return 0;
 	cfg_gen++;
 	mode = cfg("experiment", 10);
+#ifndef _WIN64
+	if (mode > 5)
+		mode = 5; // 32 bits: the compositor's 2D layers (mode 10) are not ported yet
+#endif
 	if (!hooks_apply() || !players_apply(players)) {
 		mode = 0;
 		return 0;
@@ -4433,21 +4762,27 @@ void native_install(void)
 	lstrcpyA(settings_path, path);
 	base = (uint8_t *)GetModuleHandleA(NULL);
 #ifndef _WIN64
-	// the 32-bit port is switched on piece by piece: experiment 2 (alternate frames, compositor) first
-	if (cfg("experiment", 0) == 2) {
-		mode = 2;
-		hooks_apply32();
-		log_printf("native: 32-bit experiment 2 %s", hooks_ok ? "on" : "failed");
-	} else {
-		log_printf("native: the 32-bit port is off ([native] experiment=2 for the first step)");
+	// the 32-bit port is switched on piece by piece: experiment=2 (alternate frames, compositor), then players=2 with experiment=5 (two client contexts)
+	if (cfg("players", 0) < 2) {
+		if (cfg("experiment", 0) == 2) {
+			mode = 2;
+			hooks_apply32();
+			log_printf("native: 32-bit experiment 2 %s", hooks_ok ? "on" : "failed");
+		} else {
+			log_printf("native: the 32-bit port is off ([native] experiment=2 or players=2 experiment=5)");
+		}
+		return;
 	}
-	return;
 #endif
 	for (size_t i = 0; i < sizeof(native_commands) / sizeof(native_commands[0]); i++)
 		game_add_command(&native_commands[i]);
+#ifdef _WIN64
 	padglyphs_install(text_pad_player);
+#endif
+#ifdef _WIN64
 	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 		log_printf("native: dobj add bytes differ (treelog in the plain game)");
+#endif
 	// the QA runs: settings.ini [native] players=2 starts the session at once (the menu's button does it later, native_split_start)
 	int players = cfg("players", 0);
 	if (players >= 2)
@@ -4503,7 +4838,7 @@ void native_split_stop(void)
 	InterlockedExchange(&coopdvar_on, 0);
 	Sleep(60); // the forcing thread has written its last value
 	{
-		uint8_t *dvar = *(uint8_t **)(base + 0x1905308); // the scripts' co-op dvar goes back to 0 (the game's own co-op sets it itself)
+		uint8_t *dvar = *(uint8_t **)(base + RVA_COOP_DVAR); // the scripts' co-op dvar goes back to 0 (the game's own co-op sets it itself)
 		if (dvar)
 			*(int *)(dvar + 0x10) = 0;
 	}
