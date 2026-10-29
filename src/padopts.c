@@ -71,7 +71,7 @@ static void unlock_aim_dvars(void)
 		dvar_t *d = *(dvar_t **)(base + rva);
 #else
 	for (int i = 0; i < 38; i++) {
-		dvar_t *d = *(dvar_t **)(base + aim_dvar_rvas32[i]);
+		dvar_t *d = *(dvar_t **)(base + XR(aim_dvar_rvas32[i]));
 #endif
 		if (d && (d->flags & DVAR_CHEAT)) {
 			d->flags &= ~DVAR_CHEAT;
