@@ -28,6 +28,7 @@
 #include "steamnet.h"
 #include "transplant.h"
 #include "mirror.h"
+#include "native.h"
 #include "shot.h"
 #include "party.h"
 #include "settings.h"
@@ -239,6 +240,7 @@ static DWORD WINAPI identify(LPVOID unused)
 			shot_install();
 			fov_install();
 			splitscreen_install();
+			native_install();
 			instance_install();
 			control_start();
 			return 0;

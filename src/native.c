@@ -23,15 +23,27 @@
 #include "padglyphs.h"
 #include "rumble.h"
 #include "shot.h"
+#include "d3dcap.h"
 
 // Both builds compile this file; the 64-bit addresses below are used by the 64-bit build, the 32-bit ones are found in docs/32bit-native-map/ and come in piece by piece
 // (NATIVE32_READY in native_install says what is switched on).
+#ifdef _WIN64
 #define RVA_CG_DRAW 0x0bca00         // void (unsigned local_client, int, int): the cgame's frame; it calls the begin-frame below in the middle
 #define RVA_BEGIN_FRAME 0x00c840     // void (void): swaps the renderer's two frame data sets and resets their command buffers: once per frame
 #define RVA_SUBWINDOW_DVAR 0x4116158 // dvar_t *, the value (4 floats) at +0x10
 
 static const uint8_t cg_draw_bytes[] = {0x48, 0x8b, 0xc4, 0x55, 0x56, 0x41, 0x57, 0x48, 0x81, 0xec, 0xc0, 0x00, 0x00, 0x00};
 static const uint8_t begin_frame_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20};
+#define RVA_CG_TIME 0x422434 // cg.time
+#else
+// The 32-bit official build (docs/32bit-native-map/render.md): the cgame's DrawActiveFrame is cdecl (local client, int, int); its first five bytes (sub esp,0xc; push ebx; push ebp) are clean to copy.
+// The begin-frame is not hooked at its start (its first instructions are a push run and a relative call) but at its call in the cgame draw.
+#define RVA_CG_DRAW 0x0666c0
+#define RVA_BEGIN_FRAME_CALL 0x066831 // the call of the begin-frame (VA 0x50d800) inside the cgame draw
+#define RVA_SUBWINDOW_DVAR 0x1b19f98
+#define RVA_CG_TIME 0x374c20
+static const uint8_t cg_draw_bytes[] = {0x83, 0xec, 0x0c, 0x53, 0x55};
+#endif
 static void (*cg_draw_original)(unsigned, int, int);
 static void (*begin_frame_original)(void);
 static uint8_t *base;
@@ -1314,7 +1326,11 @@ static void comp_hook(void)
 {
 	if (the_device)
 		return;
+#ifdef _WIN64
 	IDirect3DDevice9 *dev = *(IDirect3DDevice9 **)(base + RVA_D3D_DEVICE);
+#else
+	IDirect3DDevice9 *dev = (IDirect3DDevice9 *)d3dcap_device(); // src/d3dcap.c: caught when the game created it
+#endif
 	if (!dev)
 		return;
 	the_device = dev;
@@ -1377,6 +1393,9 @@ static void ctx_after_draw(void);
 // game's image: the pair of floats (3.0, 2.25) (real pixels per virtual unit), (1/3, 0.4444), and the int pair (1920, 1080); every hit is logged with the floats around it.
 static void scan_place(void)
 {
+#ifndef _WIN64
+	return; // QA scan of the 64-bit placement array
+#endif
 	static int done;
 	if (done || !cfg("scanplace", 0))
 		return;
@@ -1596,7 +1615,7 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 		} else {
 			cg_draw_original(mode == 3 && bottom ? 1u : local_client, a, b); // mode 3: the odd frames run the cgame for LOCAL CLIENT 1
 		}
-		half_note(*(int *)(base + 0x422434), bottom);
+		half_note(*(int *)(base + RVA_CG_TIME), bottom);
 		memcpy(sw, saved, sizeof(saved));
 		if (ctx_on)
 			ctx_after_draw();
@@ -4256,8 +4275,31 @@ static int players_apply(int n)
 }
 
 // The hooks of the client side: installed once, they pass everything through while native_active is 0 (journal group 0)
+#ifndef _WIN64
+// The 32-bit port, step 1 (docs/32bit-native-map/): mode 2 only, the alternate frames and the compositor with the one player in both halves: [native] experiment=2 in settings.ini.
+static int hooks_apply32(void)
+{
+	if (hooks_installed)
+		return hooks_ok;
+	hooks_installed = 1;
+	jgroup = 0;
+	uint8_t *site = base + RVA_BEGIN_FRAME_CALL;
+	if (!jhook_call(site, (void *)begin_frame_hook, (void **)&begin_frame_original) ||
+	    !jhook_function(base + RVA_CG_DRAW, cg_draw_bytes, sizeof(cg_draw_bytes), cg_draw_hook, (void **)&cg_draw_original)) {
+		log_printf("native: unexpected code at the cgame draw or its begin-frame call, the 32-bit split screen is off");
+		return 0;
+	}
+	hooks_ok = 1;
+	return 1;
+}
+#endif
+
 static int hooks_apply(void)
 {
+#ifndef _WIN64
+	return hooks_apply32();
+}
+#else
 	if (hooks_installed)
 		return hooks_ok;
 	hooks_installed = 1;
@@ -4283,6 +4325,7 @@ static int hooks_apply(void)
 	hooks_ok = 1;
 	return 1;
 }
+#endif
 
 // the client state of a session: context 1 starts again with every level
 static void session_reset(void)
@@ -4381,10 +4424,6 @@ static int text_pad_player(int *tactical)
 
 void native_install(void)
 {
-#ifndef _WIN64
-	log_printf("native: the 32-bit port is not switched on yet (docs/32bit-native-map/)");
-	return;
-#endif
 	char path[MAX_PATH];
 	DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
 	while (n > 0 && path[n - 1] != '\\')
@@ -4393,6 +4432,17 @@ void native_install(void)
 	lstrcatA(path, "mw2coop\\settings.ini");
 	lstrcpyA(settings_path, path);
 	base = (uint8_t *)GetModuleHandleA(NULL);
+#ifndef _WIN64
+	// the 32-bit port is switched on piece by piece: experiment 2 (alternate frames, compositor) first
+	if (cfg("experiment", 0) == 2) {
+		mode = 2;
+		hooks_apply32();
+		log_printf("native: 32-bit experiment 2 %s", hooks_ok ? "on" : "failed");
+	} else {
+		log_printf("native: the 32-bit port is off ([native] experiment=2 for the first step)");
+	}
+	return;
+#endif
 	for (size_t i = 0; i < sizeof(native_commands) / sizeof(native_commands[0]); i++)
 		game_add_command(&native_commands[i]);
 	padglyphs_install(text_pad_player);
