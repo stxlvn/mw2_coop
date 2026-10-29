@@ -595,7 +595,41 @@ static void skip_rotation(IDirect3DDevice9 *dev)
 		shot_save_now(dev, name);
 	}
 }
-static void before_present(int via, IDirect3DDevice9 *dev)
+// [native] perflog=1: where a second of split screen goes (milliseconds, QueryPerformanceCounter): the waits for the renderer's workers, the copying of the contexts' ranges,
+// the two contexts' client frames, the gap between the engine's frames, and the compositor (render thread)
+static LARGE_INTEGER perf_freq;
+static volatile LONGLONG perf_wait, perf_copy, perf_ctx[2], perf_comp, perf_gap_sum, perf_step, perf_aim, perf_sync;
+static volatile LONG perf_swaps, perf_ctx_n[2], perf_comp_n, perf_gap_n;
+static LONGLONG perf_now(void)
+{
+	LARGE_INTEGER c;
+	QueryPerformanceCounter(&c);
+	return c.QuadPart;
+}
+static void perf_report(void)
+{
+	static LONGLONG last;
+	LONGLONG now = perf_now();
+	if (!perf_freq.QuadPart)
+		QueryPerformanceFrequency(&perf_freq);
+	if (!last)
+		last = now;
+	if (now - last < perf_freq.QuadPart)
+		return;
+	double sec = (double)(now - last) / (double)perf_freq.QuadPart, ms = 1000.0 / (double)perf_freq.QuadPart;
+	LONG n0 = perf_ctx_n[0], n1 = perf_ctx_n[1], nc = perf_comp_n, ng = perf_gap_n, sw = perf_swaps;
+	log_printf("native: perf per second: engine frames %.0f (gap %.2f ms), ctx0 frames %ld (%.2f ms each), ctx1 frames %ld (%.2f ms each), swaps %ld (waits %.1f ms, copies %.1f ms, per second in total), compositor %ld frames (%.2f ms each)",
+		   ng / sec, ng ? (double)perf_gap_sum * ms / ng : 0.0, n0, n0 ? (double)perf_ctx[0] * ms / n0 : 0.0, n1, n1 ? (double)perf_ctx[1] * ms / n1 : 0.0, sw,
+		   (double)perf_wait * ms / sec, (double)perf_copy * ms / sec, nc, nc ? (double)perf_comp * ms / nc : 0.0);
+	log_printf("native: perf per second, inside the client frames (ms per second in total): server steps %.1f, aim targets %.1f, body sync %.1f", (double)perf_step * ms / sec,
+		   (double)perf_aim * ms / sec, (double)perf_sync * ms / sec);
+	perf_step = perf_aim = perf_sync = 0;
+	perf_wait = perf_copy = perf_ctx[0] = perf_ctx[1] = perf_comp = perf_gap_sum = 0;
+	perf_swaps = perf_ctx_n[0] = perf_ctx_n[1] = perf_comp_n = perf_gap_n = 0;
+	last = now;
+}
+
+static void before_present_inner(int via, IDirect3DDevice9 *dev)
 {
 	trace_present();
 	InterlockedIncrement(&present_hits[via]);
@@ -690,6 +724,19 @@ static void before_present(int via, IDirect3DDevice9 *dev)
 	if (pops % 300 == 0)
 		log_printf("native: %ld frames composed via %d, presents %ld/%ld/%ld, %ld views queued, queue %ld", (long)pops, via, (long)present_hits[0],
 			   (long)present_hits[1], (long)present_hits[2], (long)pushes_total, (long)(ring_head - ring_tail));
+}
+
+static void before_present(int via, IDirect3DDevice9 *dev)
+{
+	static int on = -1;
+	if (on < 0)
+		on = cfg("perflog", 0);
+	LONGLONG t0 = on ? perf_now() : 0;
+	before_present_inner(via, dev);
+	if (on) {
+		perf_comp += perf_now() - t0;
+		InterlockedIncrement(&perf_comp_n);
+	}
 }
 
 static HRESULT STDMETHODCALLTYPE present_hook(IDirect3DDevice9 *dev, const RECT *a, const RECT *b, HWND c, const RGNDATA *d)
@@ -1665,8 +1712,10 @@ static void ctx_wait_workers(void)
 	if (!on)
 		return;
 	void (*wait_type)(int) = (void (*)(int))(base + 0x300a0);
+	LONGLONG t0 = perf_now();
 	for (int t = 0; t <= 18; t++)
 		wait_type(t);
+	perf_wait += perf_now() - t0;
 }
 
 static void ctx_swap_mask(int to, unsigned mask)
@@ -1675,6 +1724,7 @@ static void ctx_swap_mask(int to, unsigned mask)
 		return;
 	ctx_ensure();
 	ctx_wait_workers();
+	LONGLONG t0 = perf_now();
 	for (size_t i = 0; i < NRANGES; i++) {
 		if (!(mask & (1u << i)))
 			continue;
@@ -1682,6 +1732,8 @@ static void ctx_swap_mask(int to, unsigned mask)
 		memcpy(ctx_store[ctx_current][i], live, ranges[i].size);
 		memcpy(live, ctx_store[to][i], ranges[i].size);
 	}
+	perf_copy += perf_now() - t0;
+	InterlockedIncrement(&perf_swaps);
 	ctx_current = to;
 }
 
@@ -2389,6 +2441,32 @@ static void ik_hook(void *ent, void *dobj)
 	ik_original(ent, dobj);
 }
 
+// The snapshot transition (rva 0xb8000, 0xb8300) makes an entity's client DObj with rva 0xb86f0(server entity info, server DObj info); for an actor it takes one of 112 pre-made
+// DObjs from a pool (rva 0x12c6d0: in-use flags at rva 0xf50ec0, the DObjs at 0xf50b40) and gives none when all are in use: such an actor is not drawn at all (Price on Contingency,
+// a different one in each run). Both contexts process every snapshot and the client DObjs are shared, so every actor made one twice, and the one the table lost stayed in use
+// for ever. [native] dobjonce=1 (default): context 1 makes none for an entity but player 1 (his own entity is in no snapshot of context 0).
+static unsigned (*dobj_make_original)(void *, void *);
+static const uint8_t dobj_make_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xfa, 0x48, 0x8b, 0xf1, 0x48, 0x85, 0xd2};
+static unsigned dobj_make_hook(void *info, void *dobj_info)
+{
+	if (native_active && ctx_current == 1 && info && CFG_ONCE("dobjonce", 1) && *(const uint16_t *)((const uint8_t *)info + 0x7e) != 0)
+		return 0;
+	int ent = info ? *(const uint16_t *)((const uint8_t *)info + 0x7e) : -1;
+	const uint8_t *(*client_dobj)(int) = (const uint8_t *(*)(int))(base + 0x1fece0);
+	const uint8_t *before = ent >= 0 && ent < 2048 ? client_dobj(ent) : NULL;
+	unsigned r = dobj_make_original(info, dobj_info);
+	if (CFG_ONCE("dobjmakelog", 0) && ent >= 64) {
+		static int logged;
+		const uint8_t *after = client_dobj(ent);
+		if (logged < 400 || ent == 1399) {
+			logged++;
+			log_printf("native: client DObj make: entity %d ctx %d type %d -> %u, client DObj %p -> %p, server DObj info %p", ent, ctx_current, *(const uint8_t *)info, r, (const void *)before,
+				   (const void *)after, dobj_info);
+		}
+	}
+	return r;
+}
+
 // ---- aim assist for a pad player, the console game's: this PC build left its code out but keeps its data. The cgame fills a list of the targets on the screen
 // each frame (aaGlob[0], rva 0x3cf180, by rva 0x6a570 from the view at 0xbd2c5; one per context: it is in the swapped ranges), and the mouse move (0xcfcf0) computes
 // the regions of the aim_* dvars into it (0x6a350, before its auto melee 0x685c0). On that list, like the console: the turn slows down over a target (aim_slowdown_*),
@@ -2747,6 +2825,19 @@ static void client_frame_hook(void)
 		return;
 	}
 	frame_bottom = 0;
+	static LONGLONG perf_prev, perf_start;
+	static int perf_on = -1;
+	if (perf_on < 0)
+		perf_on = cfg("perflog", 0);
+	if (perf_on) {
+		LONGLONG now = perf_now();
+		if (perf_prev) {
+			perf_gap_sum += now - perf_prev;
+			perf_gap_n++;
+		}
+		perf_prev = perf_start = now;
+		perf_report();
+	}
 	{ // the scripts' switch: the dvar mw2coop_split_view is "1" once the intro is over
 		uint8_t *d = ((uint8_t * (*)(const char *))(base + 0x26bdf0))("mw2coop_split_view");
 		const char *v = d ? *(const char **)(d + 0x10) : NULL;
@@ -2829,6 +2920,10 @@ static void client_frame_hook(void)
 		client_frame_original();
 		native_unswap_entities();
 		ctx_swap(0);
+		if (perf_on) {
+			perf_ctx[1] += perf_now() - perf_start;
+			perf_ctx_n[1]++;
+		}
 		return;
 	}
 	if (nopredict && np_dvar)
@@ -2836,7 +2931,11 @@ static void client_frame_hook(void)
 	if (nogun && gun_dvar)
 		*(int *)(gun_dvar + 0x10) = 1;
 	pad_frame_player(0, 1);
-	body_dobj_sync();
+	{
+		LONGLONG t0 = perf_now();
+		body_dobj_sync();
+		perf_sync += perf_now() - t0;
+	}
 	if (native_active && CFG_ONCE("clocklog", 0)) { // QA: the game's clock (QA scenario clock) against the wall clock: milliseconds of game time per wall second
 		static DWORD wall0;
 		static int game0, n;
@@ -2863,6 +2962,10 @@ static void client_frame_hook(void)
 	else if (!split_on)
 		video_pop();
 	client_frame_original();
+	if (perf_on) {
+		perf_ctx[0] += perf_now() - perf_start;
+		perf_ctx_n[0]++;
+	}
 }
 
 // Diagnostics: the alpha of the co-op "waiting for the other player" text (rva 0x22eb70, called from the cgame's 2D at 0x94039).
@@ -2953,17 +3056,26 @@ static void (*server_step_original)(void);
 static void aim_targets_update(void);
 static void server_step_hook(void)
 {
+	LONGLONG t0 = perf_now();
 	if (ctx_current == 1) {
 		ctx_swap(0);
 		server_step_original();
-		if (native_active)
+		if (native_active) {
+			LONGLONG t1 = perf_now();
 			aim_targets_update();
+			perf_aim += perf_now() - t1;
+		}
 		ctx_swap(1);
+		perf_step += perf_now() - t0;
 		return;
 	}
 	server_step_original();
-	if (native_active)
+	if (native_active) {
+		LONGLONG t1 = perf_now();
 		aim_targets_update();
+		perf_aim += perf_now() - t1;
+	}
+	perf_step += perf_now() - t0;
 }
 
 // Player 1 (local client 1) has no input device yet: every simulation step he gets the usercmd of player 0 with the buttons and the movement cleared and the view turned by
@@ -3477,7 +3589,15 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			if (game_dvar_raw("mw2coop_qa_s", v, sizeof(v)))
 				sscanf(v, "%d %d %f", &n, &script_len, &rate);
 			if (at && ent >= 0)
-				log_printf("native: speed entity %d: drawn path ctx0 %.0f ctx1 %.0f units per second, script %d units per second (playback rate %.2f)", ent, path[0], path[1], script_len * 5 / 5, rate);
+			{
+				const uint8_t *cd = ((const uint8_t *(*)(int))(base + 0x1fece0))(ent), *sd = ((const uint8_t *(*)(int))(base + 0x1fee30))(ent);
+				int pool = 0;
+				for (int k = 0; k < 0x70; k++)
+					pool += base[0xf50ec0 + k] != 0;
+				log_printf("native: speed entity %d: drawn path ctx0 %.0f ctx1 %.0f units per second, script %d units per second (playback rate %.2f), client DObj %p (%d models), server DObj %p (%d models), actor DObj pool %d of 112 in use, flags150 %08x",
+					   ent, path[0], path[1], script_len, rate, (const void *)cd, cd ? cd[0xd] : -1, (const void *)sd, sd ? sd[0xd] : -1, pool,
+					   ent >= 0 && ent < 2048 ? *(const unsigned *)(base + 0xd9e070 + (size_t)ent * 0x2a0 + 0x150) : 0u);
+			}
 			ent = n;
 			path[0] = path[1] = 0;
 			have[0] = have[1] = 0;
@@ -3863,9 +3983,14 @@ static void ent_clean_hook(void)
 			log_printf("%s", line);
 		}
 	}
-	if (ctx_current == 1) { // both contexts process every snapshot: the cleanup frees the engine's shared per-entity objects (the DObjs), so only context 0 may do it (a second free of the same entity crashed in the pool free)
-		uint32_t *f = (uint32_t *)(base + 0x52c300);
-		memset(f, 0, 64 * sizeof(uint32_t));
+	if (ctx_current == 1) { // both contexts process every snapshot: the cleanup frees the engine's shared per-entity objects (the DObjs), so only context 0 may do it (a second free of the same entity crashed in the pool free).
+		// The entities flagged for it are NOT forgotten (as they were: the flags were cleared here): a client DObj made by a transition is only the pending one until the cleanup of its flag
+		// makes it the current one (rva 0x1fec30), and a flag wiped before context 0's cleanup ran left the entity without a client DObj for good: not drawn (Price on Contingency, in some runs).
+		// Context 0's next cleanup takes them. [native] cleanwipe=1 clears them as before.
+		if (CFG_ONCE("cleanwipe", 0)) {
+			uint32_t *f = (uint32_t *)(base + 0x52c300);
+			memset(f, 0, 64 * sizeof(uint32_t));
+		}
 		return;
 	}
 	ent_clean_original();
@@ -4019,6 +4144,8 @@ static void contexts_install(void)
 			log_printf("native: add entity bytes differ");
 		if (!jhook_function(base + 0xb0680, pass2_bytes, sizeof(pass2_bytes), pass2_hook, (void **)&pass2_original))
 			log_printf("native: second entity pass bytes differ");
+		if (!jhook_function(base + 0xb86f0, dobj_make_bytes, sizeof(dobj_make_bytes), dobj_make_hook, (void **)&dobj_make_original))
+			log_printf("native: client DObj make bytes differ");
 		if (!jhook_call(base + 0x896d3, ik_hook, (void **)&ik_original))
 			log_printf("native: no call at the foot adjustment");
 		if (!jhook_function(base + 0x29a120, xfer_bytes, sizeof(xfer_bytes), xfer_hook, (void **)&xfer_original))
