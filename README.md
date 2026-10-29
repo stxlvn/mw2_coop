@@ -16,7 +16,7 @@
 <h3 align="center">Play the whole Modern Warfare 2 (2009) campaign with a friend.</h3>
 
 <p align="center">
-  Two-player co-op on the current <b>64-bit Steam build</b>, built on the co-op netcode the game already ships for Spec Ops.<br>
+  Two-player co-op on the current <b>64-bit Steam build</b>: online, or both on one PC in <b>split screen</b> (new, experimental). Built on the co-op netcode the game already ships for Spec Ops.<br>
   <a href="https://github.com/stxlvn/mw2_coop/releases/latest"><b>⬇ Download the latest release</b></a> · <a href="https://www.nexusmods.com/codmw2/mods/99">Nexus Mods</a> · <a href="#install">Install</a> · <a href="#known-issues">Known issues</a>
 </p>
 
@@ -33,6 +33,8 @@
 - 🚩 **Checkpoints in every mission**: a failed mission starts again from the last section you both reached.
 - 🧭 **Hosting and joining in the game's menus**: Campaign → co-op lobby, mission select, open / Steam friends only / password, a list of games on the network, join by address or Steam invite.
 - 🌐 **Online made easy**: an in-game Windows Firewall prompt and automatic UPnP port forwarding for the host.
+- 🖥 **Split screen on one PC (new, experimental)**: Campaign → Split screen puts both players in one game window, cut top and bottom like the Xbox 360 version, each half with its own view, weapon, HUD and effects. Each player picks his device in the lobby by pressing a button on it (keyboard and mouse, or a gamepad); a gamepad gets the console layout, aim assist, vibration, its buttons in the hints and its own options page.
+- 🎞 **Loads like single player**: the campaign's loading screen with the mission's briefing film; online, the level waits for the film until it ends or either player skips it.
 - 💾 **Saves for each playthrough, kept by the host**: each save remembers who played it. "Continue" picks up your partner's playthrough, "Pick a save" lists them (mission and players); playing on with someone new asks first: add them to the playthrough, or start a new game from the beginning. Both move on to the next mission together, and each player's own campaign records (missions unlocked, difficulty, achievements) are written as in single player.
 - 🔤 **Fonts closer to the English original (Russian game)**: the Russian build draws everything in one generic sans; the mod swaps in the H*-Mod fonts (a Bank Gothic like face for the headings, a Conduit like one for the running text, a bold one for the mission intro text; SIL OFL; `mw2coop\fonts`). Off with `fonts=0` in `settings.ini`; the English game is not touched.
 - 🧩 **Nothing of the game replaced**: one `winmm.dll` and a `mw2coop` folder; scripts are patched in memory when they load.
@@ -70,6 +72,10 @@ All mission intros hold both players; the title plays only on a mission's first 
 5. **Partner:** accept the host's Steam invite, or Campaign → join a game, then pick it from the list or type the host's address.
 6. Both press **Ready**, the host presses **Start**.
 
+**Split screen on one PC:** Campaign → Split screen. Each player presses a button on the device he will play on (the cards Alpha and Bravo show it), then Start. The gamepad layout and options are in `INSTALL.txt`.
+
+**Older 32-bit game or the iw4x-sp client:** take `mw2coop-<version>-x86.zip` (experimental); its `INSTALL.txt` says which `winmm.dll` goes where and what was checked.
+
 `INSTALL.txt` in the archive says the same in English and Russian. To uninstall, delete `winmm.dll` and the `mw2coop` folder.
 
 ## 🌐 Playing over the internet
@@ -85,10 +91,12 @@ Something wrong? Send `mw2coop\mw2coop.log` from both PCs.
 - Checkpoints: bots fail the mission in every section of every campaign mission, 64-bit and 32-bit, and check that the level starts again with both players up and together (all pass). A restart goes to the level's own checkpoint, which is sometimes the section before the one you died in. Not tried by two people yet.
 - Rarely (once in about a hundred mission loads, seen in the 32-bit build) both PCs hang right after a mission starts. A cause was found and fixed (see the changelog) but one hang does not prove it; if it happens, restart the mission and tell us.
 - Nobody has played the whole campaign through together yet: tell us how far you got.
+- Split screen (new): tested with bots, screenshots of both halves and simulated gamepads, not yet with two real gamepads or by two people. One sound listener (both hear from the first player's place), no second keyboard, the second player can only pause (not work the menus); the game may not close by itself after quitting (end it in Task Manager).
+- The 32-bit game and the iw4x-sp client (archive `-x86`) are experimental: checked with bots on the Trainer and Cliffhanger only.
 
 ## 🧪 How it's tested
 
-Two copies of the game on one PC (host + client), driven by in-game bots: each check scenario runs on both machines and reports PASS or FAIL. Bots press real buttons through the game's key bindings where it matters, and a level tour visits every start point with frames from both screens. Every fix comes with a test that failed before it and passes after.
+Two copies of the game on one PC (host + client), driven by in-game bots: each check scenario runs on both machines and reports PASS or FAIL. Bots press real buttons through the game's key bindings where it matters, and a level tour visits every start point with frames from both screens. The split screen is checked with the frames of both halves the mod composes and with scripted scenarios on simulated gamepads. Every fix comes with a test that failed before it and passes after.
 
 ---
 
@@ -103,6 +111,8 @@ Two copies of the game on one PC (host + client), driven by in-game bots: each c
 - In a co-op session GSC `getdvar` only returns dvars with certain flags; the DLL flags `start` and the QA dvars, and every dvar a level script sets itself, so levels that read back their own dvars behave as in single player.
 - Difficulty: the lobby's popup only latches `g_gameskill`; the DLL hooks `profile_difficultySave` for the host's pick and sends it to the client with `coopLaunch`.
 - Diagnostics in `mw2coop\mw2coop.log`: GSC errors with the script call stack (repeats logged at 1, 2, 3, 10, 100, 1000... hits), crashes with the faulting RVA and stack, `!trace <rva>` logs every call of a builtin method.
+- Split screen: one game process runs two local players. The DLL keeps a second copy of the client state (view, HUD, effects system, input) and swaps it in for the second player's half every frame, then composes both halves into the window (`src/native.c`, `docs/native-splitscreen-plan.md`). The lobby picks each player's device from the first button pressed on it.
+- The 32-bit mod (`sh build.sh x86`, `docs/32bit-plan.md`) and its iw4x-sp profile (`sh build.sh x86 iw4x`; iw4x-sp's 1.0.159 addresses are mapped in `src/addr159.c`, generated by `tools/gen_addr159.py`) ship as a separate experimental archive `mw2coop-<version>-x86.zip` in each release.
 
 </details>
 
@@ -135,7 +145,7 @@ Needs [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) and a POSIX shell (Gi
 ```
 LLVM_MINGW=/path/to/llvm-mingw-ucrt-x86_64 ./build.sh release
 ```
-`tools/make_release.sh <version>` builds the release DLL (checked for local paths) and packs `dist/mw2coop-<version>.zip` with the scripts, patches and `content/release` (`INSTALL.txt`, `settings.ini`, the firewall helper), plus its SHA-256. `tools/gen_winmm_proxy.py` regenerates the export stubs from the system `winmm.dll`.
+`tools/make_release.sh <version> [x86]` builds the release DLL (checked for local paths) and packs `dist/mw2coop-<version>.zip` with the scripts, patches and `content/release` (`INSTALL.txt`, `settings.ini`, the firewall helper), plus its SHA-256; with `x86` it packs `mw2coop-<version>-x86.zip`, the 32-bit DLL in the root and the iw4x-sp one in the `iw4x-sp` folder. `tools/gen_winmm_proxy.py` regenerates the export stubs from the system `winmm.dll`.
 
 Testers: use a **copy** of the game folder, not your Steam install, and start it with `SteamAppId=10180` and `SteamGameId=10180` set (without them the Steam DRM wrapper exits and Steam starts your **real** install instead); `tools/run_test.ps1` does this and kills any `iw4sp.exe` outside the test folder.
 
@@ -155,7 +165,7 @@ Scenarios:
 - **No Russian:** `nrend`, `nrend2`, `cover`, `lineoffire`, `bodyview`. **Crash site / Second Sun:** `crashsite`, `dcemp`, `street`.
 - **Whiskey Hotel:** `flares`. **Loose Ends:** `betrayal`. **Endgame:** `boat`, `boat2`, `knife`, `knife2`.
 
-A scenario can press a player's buttons for real: `press( player, "activate", ms )` makes that player's own machine run the key binding (`mw2coop_bind +activate`, see `src/control.c`). Real key input runs in `buttons`, `pickups`, `introfreeze`, `bay`, `look`, `flares` and the tour's walk; the older set-piece scenarios still move players by script (button holds, velocity pushes) and have not been checked with real input. `tools/check_patches.py` checks the patches against extracted game scripts without starting the game; `tools/gen_*_patches.py` generate the larger patches from the extracted scripts.
+A scenario can press a player's buttons for real: `press( player, "activate", ms )` makes that player's own machine run the key binding (`mw2coop_bind +activate`, see `src/control.c`). Real key input runs in `buttons`, `pickups`, `introfreeze`, `bay`, `look`, `flares` and the tour's walk; the older set-piece scenarios still move players by script (button holds, velocity pushes) and have not been checked with real input. Split screen: `tools/qa_native.sh [seconds] [extra [native] lines]` runs one copy with both players in it and saves the composed frame; `MW2COOP_LOBBY=1` goes through the menus and the lobby with simulated gamepads (`MW2COOP_PAD`), other options are in the script's header. `tools/check_patches.py` checks the patches against extracted game scripts without starting the game; `tools/gen_*_patches.py` generate the larger patches from the extracted scripts.
 
 </details>
 

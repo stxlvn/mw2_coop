@@ -42,14 +42,23 @@ https://github.com/stxlvn/mw2_coop
 Проблемы: приложите mw2coop\mw2coop.log обоих игроков.
 
 ЭКСПЕРИМЕНТАЛЬНО: встроенный разделённый экран (две половины одного окна, один ПК)
-Это пререлиз с экспериментальной сборкой: кроме сетевой игры в нём есть режим "РАЗДЕЛЕНИЕ ЭКРАНА" для двух игроков
-на одном компьютере. Он сырой и может падать; для обычной игры по сети он не нужен.
-Как запустить: Кампания -> РАЗДЕЛЕНИЕ ЭКРАНА. Откроется лобби: первый игрок играет на клавиатуре и мыши, второй
-нажимает любую кнопку на своём геймпаде (нужен XInput-геймпад). Затем "Старт".
-Экран режется на две половины сверху и снизу; к концу миссии или при выходе в меню режим выключается.
-Известные проблемы: смена оружия вторым игроком только крестовиной;
-звук один на двоих; игра может не закрываться сама после выхода
-(закройте её в диспетчере задач); только 64-битная сборка. Если что-то не так, приложите mw2coop\mw2coop.log.
+Это пререлиз: кроме сетевой игры в нём есть режим "РАЗДЕЛЕНИЕ ЭКРАНА" для двух игроков на одном компьютере. Он новый
+и может падать; для обычной игры по сети он не нужен.
+Как запустить: Кампания -> РАЗДЕЛЕНИЕ ЭКРАНА. Откроется лобби с двумя карточками: Альфа (верхняя половина) и Браво
+(нижняя). Каждый игрок нажимает кнопку на том устройстве, на котором будет играть: клавишу или мышь для клавиатуры и
+мыши, любую кнопку геймпада (XInput) для геймпада. Backspace (клавиатура) или Back (геймпад) отменяет выбор. "Старт"
+ждёт, пока выберут оба. Любой игрок может играть на любом устройстве: два геймпада или геймпад и клавиатура.
+Экран режется на верхнюю и нижнюю половины; при возврате в меню режим выключается сам.
+Геймпад (раскладка консоли): левый стик — движение, правый — обзор, LT — прицел, RT — огонь, A — прыжок, B — стойка
+(удержание — лёжа), X — перезарядка (удержание — использовать), Y — следующее оружие, LB / RB — гранаты, LS — бег,
+RS — удар ножом, Back — задачи, Start — пауза, крестовина — слоты действий. Помощь в прицеливании и вибрация как на
+консоли, в подсказках кнопки геймпада вместо клавиш.
+Настройки для каждого игрока (чувствительность, инверсия, помощь в прицеливании, смена стиков, тактическая раскладка,
+вибрация): главное меню -> Настройки -> Управление -> Геймпад: Альфа / Геймпад: Браво. Второй игрок не управляет меню,
+только ставит паузу.
+Известные проблемы: геймпады проверены только имитацией; звук один на двоих (слышно с места первого игрока);
+игра может не закрыться сама после выхода (закройте её в диспетчере задач). Старая 32-битная игра и клиент iw4x-sp:
+архив mw2coop-<версия>-x86.zip (экспериментально). Если что-то не так, приложите mw2coop\mw2coop.log.
 
 === English ===
 
@@ -80,8 +89,8 @@ network: the host's router opens the port itself if UPnP is on; otherwise forwar
 Uninstall: delete winmm.dll and the mw2coop folder from the game folder. Problems: attach mw2coop\mw2coop.log from both players.
 
 EXPERIMENTAL: the built-in split screen (two halves of one window, one PC)
-This prerelease carries an experimental build: besides online co-op it has a SPLIT SCREEN mode for two players on one
-computer. It is rough and may crash; online play does not need it.
+This is a pre-release: besides online co-op it has a SPLIT SCREEN mode for two players on one computer. It is new
+and may crash; online play does not need it.
 To start it: Campaign -> SPLIT SCREEN. The lobby opens with two cards, Alpha (the top half) and Bravo (the bottom half).
 Each player presses a button on the device they will play on: a key or the mouse for keyboard and mouse, any button on
 a gamepad (XInput) for a gamepad. Backspace (keyboard) or Back (gamepad) takes the choice back. Start waits until both
@@ -93,7 +102,8 @@ action slots. Aim assist and vibration work as on the console, and hints show th
 Per player options (look sensitivity, inverted look, aim assist, swapped sticks, tactical layout, vibration): Options ->
 Controls -> Gamepad: Alpha / Gamepad: Bravo in the main menu. The second player cannot work the menus, only pause.
 Known issues: the gamepad part is tested with simulated gamepads only; one sound listener; the game may not close by itself
-after quitting (end it in Task Manager); 64-bit build only. If something is wrong, attach mw2coop\mw2coop.log.
+after quitting (end it in Task Manager). The older 32-bit game and the iw4x-sp client: the archive
+mw2coop-<version>-x86.zip (experimental). If something is wrong, attach mw2coop\mw2coop.log.
 
 Not affiliated with or endorsed by Activision or Infinity Ward. mw2coop's own code is MIT
 licensed (LICENSE.txt). No game files are included.

@@ -1,31 +1,39 @@
 # Changelog
 
-## Unreleased (since v0.5.0-beta)
+## v0.5.5-beta (2026-10-29, pre-release of 0.6.0)
 
-### New: native split screen (64-bit build, one game window, one process)
+A pre-release for people who want to try the split screen and tell us what breaks; the final 0.6.0 follows after more
+testing. Everything here was tested with bots on game copies on one PC (and the split screen with frames of both
+halves and simulated gamepads); none of it has been played through by two people yet.
+
+### New: native split screen (one game window, one process)
 
 The **Split screen** button of the campaign menu no longer starts a second game; both players are in the one game, the
 picture cut top and bottom like the Xbox 360 version: each half has its own view built for its shape (field of view of
-the console's split screen), its own weapon, ammo and compass, and text that keeps its proportions. The second player
-presses any button on his gamepad in the lobby; the first one keeps keyboard and mouse. The mission starts as a normal
-level in this process, the session ends when you are back in the menus. Pause, the objectives, the briefing and the
-console show one full-size picture. Texts that belong to both are shown once: the notices at the top left (a new
-objective) in the top half, the subtitles and the mission title lines in the bottom half. The compass has no dark
-square around it.
+the console's split screen), its own weapon, ammo and compass, and text that keeps its proportions. The mission starts
+as a normal level in this process, the session ends when you are back in the menus. Pause, the objectives, the
+briefing and the console show one full-size picture. Texts that belong to both are shown once: the notices at the top
+left (a new objective) in the top half, the subtitles and the mission title lines in the bottom half.
+
+- **Lobby:** a card for each player (call signs Alpha and Bravo, no nicknames); each presses a button on the device he
+  will play on (keyboard and mouse, or a gamepad), a choice can be taken back, Start waits for both.
+- **Controls:** either player on a gamepad (console layout, XInput) or the keyboard; the second player cannot work the
+  game's menus, only pause. Gamepad extras as on the console: aim assist (the turn slows over a target, lock-on while
+  moving, the aim-down-the-sight snap), vibration, and the pad's buttons instead of key names in hints.
+  Options -> Controls has pages "Gamepad: Alpha" and "Gamepad: Bravo" (look sensitivity, inverted look, aim assist,
+  swapped sticks, tactical layout, vibration).
+- **Picture:** scopes and red dot sights in both halves; each player sees the other's body, holding the weapon he holds
+  and walking where he walks, with his name over it; each half has its own effects (the muzzle flash and smoke of one
+  player no longer fill the other's half with a white haze); no dark square around the compass; far NPCs no longer
+  jump in the bottom half; no "waiting for the other player" text while a level loads.
+- **Builds:** the 64-bit game, and, experimental, the older 32-bit game and the iw4x-sp client (1.0.159 `iw4sp.exe`),
+  both in the archive `-x86`.
 
 How: the game's own two-player machinery runs with two client states swapped per frame; the scene's 2D is drawn into
 a layer per half and laid over the squeezed view; the game's 2D placement is made for a half. Details and the research:
 `docs/native-splitscreen-plan.md`. Settings under `[native]` in `settings.ini` are for testing (QA only).
-Controls and lobby: the lobby shows a card for each player (call signs Alpha and Bravo, no nicknames); each presses a button
-on the device they will play on (keyboard and mouse, or a gamepad), a choice can be taken back, Start waits for both. Either
-player can play on a gamepad (console layout, XInput) or the keyboard; the second player cannot work the game's menus, only
-pause. Gamepad extras, as on the console: aim assist (turn slows over a target, lock-on while moving, the aim-down-the-sight
-snap), vibration, and the pad's buttons instead of key names in hints. Options -> Controls has pages "Gamepad: Alpha" and
-"Gamepad: Bravo" (look sensitivity, inverted look, aim assist, swapped sticks, tactical layout, vibration). Red dot sights work
-in both halves, and effects, glass and particles drawn with the 2D no longer veil the top half.
-A player's body in the other half now shows the weapon he holds, and changes it when he does.
-Known gaps: the gamepad part is tested with simulated gamepads only; one sound listener, no second keyboard (the keyboard goes
-to one player), the 32-bit build has the two-process split screen only.
+Known gaps: the gamepads were tested with simulated gamepads only; one sound listener, no second keyboard (the keyboard
+goes to one player); the 32-bit and iw4x-sp split screen was checked on the Trainer and Cliffhanger only.
 
 ### Loading screen and briefing of the campaign co-op
 
@@ -34,28 +42,43 @@ loading screen (another version of the film with a black panel and the studio lo
 `specialops` dvar, and the loading screen follows it. The dvar is 0 from the launch to the end of the level; Spec Ops is untouched.
 
 In the online co-op the level used to start the moment both PCs had loaded and cut the briefing off. It now waits for the film, as in single player (the level is paused meanwhile, the film
-plays on both PCs); when one player skips the briefing or the film ends on his PC, the other PC lets go at once. (64-bit build; the split screen has the single player wait already.)
+plays on both PCs); when one player skips the briefing or the film ends on his PC, the other PC lets go at once. (64-bit, 32-bit and iw4x-sp; the split screen has the single player wait already.)
 QA runs do not wait (`mw2coop_qa` set; `mw2coop_qa_brief 1` to test the wait).
-
-## Unreleased (since v0.4.7-beta)
-
-Everything here is in `main` and tested with bots on two game copies on one PC (host + client); none of it has
-been played through by two people yet.
 
 ### Fixed: the Museum, missions in the lobby, a hang
 
 - **Museum for two.** The credits camera carries both players and each sees the museum, not the inside of the other's head (both are hidden from each other during the credits). The museum's civilians play their idles again: the game's animation tables for them were incomplete in the credits mode and the vanilla game raised ten million script errors there (and left civilians in a T-pose), in single player too.
 - **All missions can be picked in the co-op lobby** (issue #3): the host sees every mission of the campaign list as open, whatever his save says. Nothing is written to the profile, and his own Mission Select keeps its rules.
 - **A rare hang of both PCs after a mission start** (seen once in the 32-bit build): the game's asset database lookup `DB_IsXAssetDefault` did not give back the reader count it took when a name was missing, so the next writer waited for ever. Fixed in both builds.
+- **No Russian**: the far ending no longer raises a script error (Makarov's second shot killed the van mate and his idle loop failed; he gets a bullet shield during the shots).
 - QA: the checkpoint bots (`cptour`) now run on every campaign mission in 64-bit and 32-bit builds and count the level's own checkpoint remaps.
+
+### Changed: the fonts of the Russian game are the H\*-Mod fonts
+
+The font replacement of v0.5.0-beta now uses the **H\*-Mod fonts** (made by Vlad Loktionov for h2-mod): a Bank Gothic
+like face for the headings and the HUD, a Conduit like one for descriptions and subtitles, a bold one for the mission
+intro text and subheadings, with smaller glyphs (SIL OFL, shipped in `mw2coop\fonts`), and his fixes of the font
+metrics and of the atlas. Works in the 64-bit and the 32-bit build. `fonts=0` under `[display]` in `settings.ini` keeps
+the game's own font; the English game is never touched.
+
+### The 32-bit game and the iw4x-sp client (experimental archive `-x86`)
+
+The archive `mw2coop-v0.5.5-beta-x86.zip` carries the 32-bit build for the older MW2 and, in the folder `iw4x-sp`, the
+profile for the iw4x-sp client (its 1.0.159 `iw4sp.exe`). Both have the online co-op and, new, everything of the split
+screen above; the Steam relay, the screenshot helper and the script error call stacks are ported too. Checked with
+bots: online co-op on both (iw4x-sp: a pair on the Trainer), the split screen on the Trainer and Cliffhanger.
+
+## v0.5.0-beta (2026-10-25)
+
+Everything here was tested with bots on two game copies on one PC (host + client); none of it has been played through
+by two people yet.
 
 ### New: fonts closer to the English original (Russian game)
 
 The Russian game draws every text in one generic condensed sans, while the English original uses Bank Gothic (headings,
 HUD numbers), ITC Conduit (running text) and T26 Carbon (mission intro screens), none of which has Cyrillic. The mod now
-renders the game's own font tables again from free fonts with Cyrillic and puts them into the game's memory: the **H\*-Mod
-fonts** (made by Vlad Loktionov for h2-mod): a Bank Gothic like face for the headings and the HUD, a Conduit like one for
-descriptions and subtitles, a bold one for the mission intro text and subheadings, with smaller glyphs (SIL OFL,
+renders the game's own font tables again from free fonts with Cyrillic and puts them into the game's memory: **Tektur**
+for the headings, the HUD and the mission intro text, **Fira Sans Condensed** for descriptions and subtitles (SIL OFL,
 shipped in `mw2coop\fonts`). Works in the 64-bit and the 32-bit build. `fonts=0` under `[display]` in `settings.ini`
 keeps the game's own font; the English game is never touched.
 
@@ -93,6 +116,13 @@ rig of his own where the animation needs one.
 - **Team Player**: either player can start the seat swap; the passenger starts looking ahead; nobody hurts the
   other during the ride.
 - **Lobby**: the password mode has its own Password row, and Start is refused until a password is set.
+
+### The 32-bit build (source only, not in the archive)
+
+The code now also builds for the older 32-bit MW2 (`sh build.sh x86`, official Steam copy of the old depots): two copies
+play a co-op session on trainer, joining by address, the script patches apply and give the same patched scripts as the
+64-bit build, and a 64-bit host with a 32-bit client was checked on trainer. It is not in this release's archive:
+the screenshot helper, Steam relay and some set pieces are not ported yet. See `docs/32bit-plan.md`.
 
 ### Fixes in the engine side
 
