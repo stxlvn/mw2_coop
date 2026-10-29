@@ -2301,6 +2301,54 @@ static void pad_menu(int pl, const xin_state_t *st)
 	p->menu_held = b;
 }
 
+// The client's DObj of a body (the table of rva 0x1fece0) is built from the server's (rva 0x1fee30: the one the scripts' Attach / DetachAll change) when the entity
+// goes through a snapshot transition (rva 0xb8000, through 0xb86f0). A player's own entity is in no snapshot of his own, so after the scripts re-attach a changed weapon
+// the body of player 1 that context 1 draws kept the weapon it first had (QA scenario armed). The transition's own update, run by hand for the two players' entities
+// whenever their client DObj and the server's do not carry the same models: 0xb86f0(server entity info 0x234520(n), 0x2968e0(server DObj)) ([native] bodysync=0 off).
+static const uint8_t *dobj_model_names(const uint8_t *dobj, const char *out[8], int *count)
+{
+	*count = dobj ? dobj[0xd] : 0;
+	const uint8_t *const *models = dobj ? *(const uint8_t *const **)(dobj + 0xa8) : NULL;
+	for (int i = 0; i < 8; i++)
+		out[i] = NULL;
+	for (int i = 0; models && i < *count && i < 8; i++)
+		out[i] = models[i] && !IsBadReadPtr(models[i], 8) ? *(const char *const *)models[i] : NULL;
+	return dobj;
+}
+static void body_dobj_sync(void)
+{
+	static DWORD at;
+	if (!native_active || ctx_current != 0 || !CFG_ONCE("bodysync", 1) || GetTickCount() - at < 200)
+		return;
+	at = GetTickCount();
+	const uint8_t *(*client_dobj)(int) = (const uint8_t *(*)(int))(base + 0x1fece0);
+	const uint8_t *(*server_dobj)(int) = (const uint8_t *(*)(int))(base + 0x1fee30);
+	for (int n = 0; n < 2; n++) {
+		const uint8_t *cd = client_dobj(n), *sd = server_dobj(n);
+		if (!cd || !sd)
+			continue;
+		const char *cn[8], *sn[8];
+		int cc, sc;
+		dobj_model_names(cd, cn, &cc);
+		dobj_model_names(sd, sn, &sc);
+		int same = cc == sc;
+		for (int i = 0; same && i < cc && i < 8; i++)
+			same = cn[i] && sn[i] && !strcmp(cn[i], sn[i]);
+		if (same)
+			continue;
+		void *info = ((void *(*)(int))(base + 0x234520))(n);
+		void *sinfo = ((void *(*)(const uint8_t *))(base + 0x2968e0))(sd);
+		int r = ((int (*)(void *, void *))(base + 0xb86f0))(info, sinfo);
+		if (r && CFG_ONCE("bodysyncfree", 1)) { // what the transition does with a 1: the client DObj is dropped and the entity marked for the cleanup that follows
+			((void (*)(unsigned))(base + 0x1fefa0))((unsigned)n);
+			((uint32_t *)(base + 0x52c300))[n >> 5] |= 0x80000000u >> (n & 31);
+		}
+		if (CFG_ONCE("bodysynclog", 0))
+			log_printf("native: body DObj sync entity %d: client %d models (last %s), server %d models (last %s) -> %d", n, cc, cc && cn[cc - 1] ? cn[cc - 1] : "-", sc,
+				   sc && sn[sc - 1] ? sn[sc - 1] : "-", r);
+	}
+}
+
 // ---- aim assist for a pad player, the console game's: this PC build left its code out but keeps its data. The cgame fills a list of the targets on the screen
 // each frame (aaGlob[0], rva 0x3cf180, by rva 0x6a570 from the view at 0xbd2c5; one per context: it is in the swapped ranges), and the mouse move (0xcfcf0) computes
 // the regions of the aim_* dvars into it (0x6a350, before its auto melee 0x685c0). On that list, like the console: the turn slows down over a target (aim_slowdown_*),
@@ -2748,6 +2796,7 @@ static void client_frame_hook(void)
 	if (nogun && gun_dvar)
 		*(int *)(gun_dvar + 0x10) = 1;
 	pad_frame_player(0, 1);
+	body_dobj_sync();
 	if (native_active) { // the menu tick does not run in a level: the pause menu's Options > Controls gets the gamepad pages from here (a level load may reload the menus)
 		static DWORD opts_at;
 		if (GetTickCount() - opts_at >= 1000) {
