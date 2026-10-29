@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "d3dcap.h"
 #include "log.h"
 #include "shot.h"
 
@@ -23,6 +24,16 @@ static end_scene_t end_scene_orig;
 static CRITICAL_SECTION lock;
 static char pending[96];
 static char dir[MAX_PATH];
+
+// 64 bits: the game keeps its device in a global; 32 bits: caught at CreateDevice (src/d3dcap.c)
+static IDirect3DDevice9 *device_ptr(void)
+{
+#ifdef _WIN64
+	return *(IDirect3DDevice9 **)((uint8_t *)GetModuleHandleA(NULL) + RVA_D3D_DEVICE);
+#else
+	return (IDirect3DDevice9 *)d3dcap_device();
+#endif
+}
 
 static int write_bmp(const char *path, const uint8_t *bits, int pitch, int w, int h)
 {
@@ -171,7 +182,7 @@ static int hook(void)
 {
 	if (end_scene_orig)
 		return 1;
-	IDirect3DDevice9 *dev = *(IDirect3DDevice9 **)((uint8_t *)GetModuleHandleA(NULL) + RVA_D3D_DEVICE);
+	IDirect3DDevice9 *dev = device_ptr();
 	if (!dev)
 		return 0;
 	void **vt = *(void ***)dev;

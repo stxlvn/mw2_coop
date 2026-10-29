@@ -13,6 +13,7 @@
 #include "scripts.h"
 #include "zones.h"
 #include "control.h"
+#include "d3dcap.h"
 #include "crash.h"
 #include "fov.h"
 #include "access.h"
@@ -259,6 +260,7 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved)
 	GetLocalTime(&day);
 	log_printf("main32: %04d-%02d-%02d, 32-bit proxy attached, pid %lu", day.wYear, day.wMonth, day.wDay,
 		   GetCurrentProcessId());
+	d3dcap_install(); // the exe's imports are loaded and its code has not run: the game has not created its device yet
 	if (!proxy_init()) {
 		log_printf("main32: could not load the real winmm.dll");
 		return FALSE;
