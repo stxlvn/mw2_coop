@@ -29,6 +29,7 @@
 #include "transplant.h"
 #include "mirror.h"
 #include "native.h"
+#include "rumble.h"
 #include "shot.h"
 #include "party.h"
 #include "settings.h"
@@ -241,6 +242,7 @@ static DWORD WINAPI identify(LPVOID unused)
 			fov_install();
 			splitscreen_install();
 			native_install();
+			rumble_install();
 			instance_install();
 			control_start();
 			return 0;

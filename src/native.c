@@ -99,6 +99,19 @@ static uint8_t *base;
 #define P0_REST_LEN 0x30
 #define P0_TREE 0x170 // the two dwords with the animation tree reference
 #define SLOT_END_PAST(q) ((q) > base + 0x545857)
+#define RVA_AIM_GLOB 0x3cf180 // aaGlob
+#define RVA_AIM_TARGET_GLOB 0x3d0530
+#define RVA_LEVEL_NUM_ENT 0xd96e80
+#define RVA_GENTITIES 0xd9e070
+#define GENT_SIZE 0x2a0
+#define GENT_SENTIENT 0x118
+#define SENT_TEAM 8
+#define GENT_HEALTH 0x164
+#define GENT_SEEN 0x150
+#define WD_AIM_RANGE 0x42c // the weapon def's aim assist ranges: aiming down the sight, auto aim
+#define WD_AIM_RANGE_ADS 0x430
+#define WD_AUTO_RANGE 0x428
+#define WEAPON_DEF(w) (((const uint8_t *(*)(int64_t))(base + 0x85850))(w))
 #define RVA_CG_ASPECT 0x43c640 // the cgame's aspect
 #define RVA_PIXEL_ASPECT 0x411373c // the pixel aspect of the 2D
 #define RVA_VIDEO_ASPECT 0x4113738
@@ -158,6 +171,19 @@ static uint8_t *base;
 #define P0_REST_LEN 0x2c
 #define P0_TREE 0x164
 #define SLOT_END_PAST(q) ((q) >= base + 0x4941e0)
+#define RVA_AIM_GLOB 0x33ba90
+#define RVA_AIM_TARGET_GLOB 0x33cec0
+#define RVA_LEVEL_NUM_ENT 0xca3c18
+#define RVA_GENTITIES 0xaa76b8
+#define GENT_SIZE 0x270
+#define GENT_SENTIENT 0x110
+#define SENT_TEAM 4
+#define GENT_HEALTH 0x14c
+#define GENT_SEEN 0x138
+#define WD_AIM_RANGE 0x2e4
+#define WD_AIM_RANGE_ADS 0x2e8
+#define WD_AUTO_RANGE 0x2e0
+#define WEAPON_DEF(w) (*(const uint8_t *const *)(base + 0x1669d08 + (size_t)(w) * 4)) // the table of weapon def pointers
 #define RVA_CG_ASPECT 0x35f018
 #define RVA_PIXEL_ASPECT 0x108edb8
 #define RVA_VIDEO_ASPECT 0x108edb4
@@ -2697,7 +2723,7 @@ static unsigned dobj_make_hook(void *info, void *dobj_info)
 // the regions of the aim_* dvars into it (0x6a350, before its auto melee 0x685c0). On that list, like the console: the turn slows down over a target (aim_slowdown_*),
 // the view stays on a target while the player moves (aim_lockon_*), and aiming down the sight turns onto the nearest target in the auto aim region (aim_autoaim_*).
 // The weapon's ranges: BG_GetWeaponDef (rva 0x85850) +0x42c aim assist range, +0x430 the same aiming down the sight, +0x428 auto aim range.
-#define AA_GLOB 0x3cf180
+#define AA_GLOB RVA_AIM_GLOB
 typedef struct {
 	int ent;
 	float mins[2], maxs[2]; // its box on the screen, -1..1 around the cross hair
@@ -2713,8 +2739,17 @@ typedef struct {
 } aa_state_t;
 static aa_state_t aa_state[2] = {{-1, -1, 0, 0, 0, 0}, {-1, -1, 0, 0, 0, 0}};
 
-static float aa_dvar(uint32_t rva) // the aim_* dvar pointers: rva 0x3cf050 .. 0x3cf178 (registered by 0x69a60)
+#ifndef _WIN64
+// the 38 aim_* dvar pointers (rva of the globals holding them, in the order of the 64-bit table 0x3cf050 + 8 * n; docs/32bit-native-map/aimrumble.md 1.1): 32-bit places them all over
+const uint32_t aim_dvar_rvas32[38] = {0x33ba84, 0x33ce70, 0x33c934, 0x33ceb4, 0x33c920, 0x33ce74, 0x33c930, 0x33ba8c, 0x33ce88, 0x33ba88, 0x33ce6c, 0x33ceac, 0x33c93c,
+				      0x33ce9c, 0x33ce60, 0x33ce68, 0x33ce94, 0x33ceb0, 0x33ce8c, 0x33ce90, 0x33ce7c, 0x33ce98, 0x33c914, 0x33cea8, 0x33cea0, 0x33c92c,
+				      0x33c910, 0x33c938, 0x33c928, 0x33ce78, 0x33c918, 0x33ce84, 0x33ba80, 0x33ce64, 0x33c924, 0x33ce80, 0x33c91c, 0x33cea4};
+#endif
+static float aa_dvar(uint32_t rva) // the aim_* dvar pointers: rva 0x3cf050 .. 0x3cf178 (registered by 0x69a60); 32 bits: the same index in aim_dvar_rvas32
 {
+#ifndef _WIN64
+	rva = aim_dvar_rvas32[(rva - 0x3cf050) / 8];
+#endif
 	const dvar_t *d = *(const dvar_t **)(base + rva);
 	return !d ? 0.0f : d->type == DVAR_TYPE_BOOL ? (float)d->current.enabled : d->current.value;
 }
@@ -2758,23 +2793,19 @@ static const aa_target_t *aa_find(const uint8_t *aa, int ent)
 // yaw, pitch: this frame's turn from the stick, in the accumulators' senses (yaw left, pitch down positive); move, look: the sticks' deflections (0..1); ads: aiming
 static void aim_assist(int pl, float dt, float *yaw, float *pitch, float move, float look, int ads)
 {
-#ifndef _WIN64
-	(void)pl, (void)dt, (void)yaw, (void)pitch, (void)move, (void)look, (void)ads;
-	return; // 32 bits: the aim assist data (aaGlob, the aim_* dvars) is mapped but not ported yet
-#endif
 	aa_state_t *s = &aa_state[pl];
 	const uint8_t *aa = base + AA_GLOB;
 	int ads_was = s->ads_was;
 	s->ads_was = ads;
 	int weapon = *(const int *)(aa + 0x24);
-	const uint8_t *wd = aa[0xb0] && weapon > 0 ? ((const uint8_t *(*)(int64_t))(base + 0x85850))(weapon) : NULL;
+	const uint8_t *wd = aa[0xb0] && weapon > 0 ? WEAPON_DEF(weapon) : NULL;
 	if (!wd) {
 		s->lock_ent = s->snap_ent = -1;
 		return;
 	}
 	const float ads_lerp = *(const float *)(aa + 0x128);
-	const float range = (*(const float *)(wd + 0x42c) * (1.0f - ads_lerp) + *(const float *)(wd + 0x430) * ads_lerp) * aa_dvar(0x3cf050);
-	float auto_range = *(const float *)(wd + 0x428) * aa_dvar(0x3cf058);
+	const float range = (*(const float *)(wd + WD_AIM_RANGE) * (1.0f - ads_lerp) + *(const float *)(wd + WD_AIM_RANGE_ADS) * ads_lerp) * aa_dvar(0x3cf050);
+	float auto_range = *(const float *)(wd + WD_AUTO_RANGE) * aa_dvar(0x3cf058);
 	if (auto_range <= 0) // this PC build's weapons have no auto aim range: their aim assist range then
 		auto_range = range;
 	const float *eye = (const float *)(aa + 0xd8), *view = (const float *)(aa + 0xf0);
@@ -3321,6 +3352,9 @@ static uint8_t *make_cmd_hook(uint8_t *out, int a)
 // into the live (context 1's) client block. They run with context 0 live; the hand-over hooks above put each client's data where its context keeps it.
 static void (*server_step_original)(void);
 static void aim_targets_update(void);
+#ifndef _WIN64
+static void *aim_for_client_fn; // set at install: VA 0x55b040, EAX = gentity, [esp+4] = client
+#endif
 static void server_step_hook(void)
 {
 	hook_counts[2]++;
@@ -4374,12 +4408,19 @@ static void target_list_hook(int lc, void **list, int *count)
 // which reads the client code's copy of the local player count, 1), and the lists published. g_entities: rva 0xd9e070, 0x2a0 bytes each: in use +0xac / +0xb0,
 // type +0 (13 an actor: health +0x164, sentient +0x118 with its team at +8), eFlags +0xc, +0x8c, the clients' "seen" bits 0x80000 << client at +0x150;
 // level.num_entities at rva 0xd96e80.
+#ifndef _WIN64
+static void aim_for_client32(int c, uint8_t *ent)
+{
+	__asm__ volatile("pushl %1\n\tcall *%2\n\taddl $4, %%esp" : "+a"(ent) : "r"(c), "m"(aim_for_client_fn) : "ecx", "edx", "memory", "cc");
+}
+#define AIM_FOR_CLIENT32(c, ent) aim_for_client32(c, ent)
+#endif
 static void aim_targets_update(void)
 {
 	if (!CFG_ONCE("aimtargets", 1))
 		return;
-	uint8_t *glob = base + 0x3d0530;
-	int count = *(int *)(base + 0xd96e80);
+	uint8_t *glob = base + RVA_AIM_TARGET_GLOB;
+	int count = *(int *)(base + RVA_LEVEL_NUM_ENT);
 	if (count <= 0 || count > 2048)
 		count = 2048;
 	for (int c = 0; c < 2; c++)
@@ -4388,26 +4429,31 @@ static void aim_targets_update(void)
 	// bits of +0x150 alone (with them written for every entity, Price was not drawn on Contingency, owner 2026-10-28), so the entity gets ours for the call and its
 	// own back after it
 	static uint32_t seen[2048];
-	const uint8_t *own = *(uint8_t **)(base + 0xd9e070 + 0x118); // player 1's sentient: his team at +8
-	const int team = own ? *(const int *)(own + 8) : -1;
+	const uint8_t *own = *(uint8_t **)(base + RVA_GENTITIES + GENT_SENTIENT); // player 1's sentient: his team at +8 (32 bits +4)
+	const int team = own ? *(const int *)(own + SENT_TEAM) : -1;
+#ifdef _WIN64
 	void (*for_client)(int, uint8_t *) = (void (*)(int, uint8_t *))(base + 0x6b630);
+#else
+	// 32 bits: the per-client check takes the gentity in EAX and the client on the stack
+#define for_client(c, ent) AIM_FOR_CLIENT32(c, ent)
+#endif
 	for (int i = 0; i < count; i++) {
-		uint8_t *ent = base + 0xd9e070 + (size_t)i * 0x2a0;
-		const uint8_t *sentient = *(uint8_t **)(ent + 0x118);
+		uint8_t *ent = base + RVA_GENTITIES + (size_t)i * GENT_SIZE;
+		const uint8_t *sentient = *(uint8_t **)(ent + GENT_SENTIENT);
 		if (CFG_ONCE("aalog", 0) && ent[0xac] && ent[0xb0] && ent[0] == 13 && sentient && i < 2048) { // QA: the teams of the actors seen, once each
 			static unsigned char logged[8];
-			int tm = *(const int *)(sentient + 8) & 7;
+			int tm = *(const int *)(sentient + SENT_TEAM) & 7;
 			if (!logged[tm]) {
 				logged[tm] = 1;
 				log_printf("native: aim targets: an actor of team %d (entity %d), player 1's team %d", tm, i, team);
 			}
 		}
 		// only the player's enemies (the axis team, 1): an ally in the list ran the check on him, and Price was not drawn (owner, Contingency, 2026-10-29)
-		if (!ent[0xac] || !ent[0xb0] || ent[0] != 13 || *(int *)(ent + 0x164) <= 0 || !sentient || *(const int *)(sentient + 8) != 1) {
+		if (!ent[0xac] || !ent[0xb0] || ent[0] != 13 || *(int *)(ent + GENT_HEALTH) <= 0 || !sentient || *(const int *)(sentient + SENT_TEAM) != 1) {
 			seen[i] = 0;
 			continue;
 		}
-		uint32_t *flags = (uint32_t *)(ent + 0x150), keep = *flags;
+		uint32_t *flags = (uint32_t *)(ent + GENT_SEEN), keep = *flags;
 		*flags = (keep & ~0x180000u) | seen[i];
 		for (int c = 0; c < 2; c++)
 			for_client(c, ent);
@@ -4769,6 +4815,13 @@ static int hooks_apply32_contexts(void)
 			if (!hook_calls32(name_site, 1, name_get_hook, (void **)&name_get_original, "name lookup"))
 				log_printf("native: no call at the name loop's name lookup");
 		}
+	}
+	aim_for_client_fn = base + 0x15b040;
+	{ // the aim assist's screen targets of each context's cgame and the server's target list of the client it is (docs/32bit-native-map/aimrumble.md 1.4, 1.5)
+		static const uint32_t screen_site[] = {0x66adc}, list_site[] = {0x88ba8};
+		if (!hook_calls32(screen_site, 1, screen_targets_hook, (void **)&screen_targets_original, "screen targets") ||
+		    !hook_calls32(list_site, 1, target_list_hook, (void **)&target_list_original, "target list"))
+			return 0;
 	}
 	if (cfg("experiment", 0) >= 8) { // the console's way (mode 8 / 10): the 2D of the scene goes into layers of its own
 		static const uint32_t scene2d_site[] = {0x1536fc}, final2d_site[] = {0x1537ae}, wait_site[] = {RVA_WAIT_ALPHA_SITE};

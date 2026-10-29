@@ -21,6 +21,28 @@
 #define GENTITY_SIZE 0x2a0
 #define GENTITY_ORIGIN 0xe8   // r.currentOrigin
 #define GENTITY_CLIENT 0x108
+#define RB_ON_ENTITY 0x342e20 // the builtin table entries (24 bytes each in 64 bits)
+#define RB_LOOP_ON_ENTITY 0x342e38
+#define RB_STOP 0x342e50
+#define RB_ON_POSITION 0x3c2138
+#define RB_LOOP_ON_POSITION 0x3c2150
+#define RB_STOP_ALL 0x3c2168
+#else
+// the 32-bit official build (docs/32bit-native-map/aimrumble.md): entries are 12 bytes {name, func, developer}
+#define RVA_EMPTY_BUILTIN 0xcf10
+#define RVA_SCR_GET_STRING 0xd5f20
+#define RVA_SCR_GET_VECTOR 0x64850
+#define RVA_G_ENTITIES 0xaa76b8
+#define GENTITY_SIZE 0x270
+#define GENTITY_ORIGIN 0xe8
+#define GENTITY_CLIENT 0x108
+#define RB_ON_ENTITY 0x2e9fd0
+#define RB_LOOP_ON_ENTITY 0x2e9fdc
+#define RB_STOP 0x2e9fe8
+#define RB_ON_POSITION 0x331aec
+#define RB_LOOP_ON_POSITION 0x331af8
+#define RB_STOP_ALL 0x331b04
+#endif
 
 static const struct {
 	const char *name;
@@ -274,12 +296,12 @@ void rumble_install(void)
 		const char *name;
 		void *func;
 	} builtins[] = {
-	    {0x342e20, "playrumbleonentity", (void *)on_entity_f},
-	    {0x342e38, "playrumblelooponentity", (void *)loop_on_entity_f},
-	    {0x342e50, "stoprumble", (void *)stop_f},
-	    {0x3c2138, "playrumbleonposition", (void *)on_position_f},
-	    {0x3c2150, "playrumblelooponposition", (void *)loop_on_position_f},
-	    {0x3c2168, "stopallrumbles", (void *)stop_all_f},
+	    {RB_ON_ENTITY, "playrumbleonentity", (void *)on_entity_f},
+	    {RB_LOOP_ON_ENTITY, "playrumblelooponentity", (void *)loop_on_entity_f},
+	    {RB_STOP, "stoprumble", (void *)stop_f},
+	    {RB_ON_POSITION, "playrumbleonposition", (void *)on_position_f},
+	    {RB_LOOP_ON_POSITION, "playrumblelooponposition", (void *)loop_on_position_f},
+	    {RB_STOP_ALL, "stopallrumbles", (void *)stop_all_f},
 	};
 	int done = 0;
 	for (size_t i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++) {
@@ -299,19 +321,3 @@ void rumble_install(void)
 	CreateThread(NULL, 0, watchdog, NULL, 0, NULL);
 	log_printf("rumble: %d rumble builtins on the pads (XInput %s)", done, xinput_set ? "found" : "missing");
 }
-#else
-void rumble_install(void)
-{
-}
-void rumble_frame(int player, int pad, int on)
-{
-	(void)player, (void)pad, (void)on;
-}
-void rumble_reset(void)
-{
-}
-void rumble_set_log(int on)
-{
-	(void)on;
-}
-#endif
