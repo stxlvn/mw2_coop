@@ -58,7 +58,7 @@ RS — удар ножом, Back — задачи, Start — пауза, кре�
 только ставит паузу.
 Известные проблемы: геймпады проверены только имитацией; звук один на двоих (слышно с места первого игрока);
 игра может не закрыться сама после выхода (закройте её в диспетчере задач). Старая 32-битная игра: архив
-mw2coop-<версия>-x86.zip, клиент iw4x-sp: mw2coop-<версия>-iw4x.zip (оба экспериментальные). Если что-то не так, приложите mw2coop\mw2coop.log.
+mw2coop-<версия>-x86.zip, клиент iw4x-sp: mw2coop-<версия>-iw4x.zip (экспериментальный). Если что-то не так, приложите mw2coop\mw2coop.log.
 
 === English ===
 
@@ -103,7 +103,7 @@ Per player options (look sensitivity, inverted look, aim assist, swapped sticks,
 Controls -> Gamepad: Alpha / Gamepad: Bravo in the main menu. The second player cannot work the menus, only pause.
 Known issues: the gamepad part is tested with simulated gamepads only; one sound listener; the game may not close by itself
 after quitting (end it in Task Manager). The older 32-bit game: the archive
-mw2coop-<version>-x86.zip, the iw4x-sp client: mw2coop-<version>-iw4x.zip (both experimental). If something is wrong, attach mw2coop\mw2coop.log.
+mw2coop-<version>-x86.zip, the iw4x-sp client: mw2coop-<version>-iw4x.zip (experimental). If something is wrong, attach mw2coop\mw2coop.log.
 
 Not affiliated with or endorsed by Activision or Infinity Ward. mw2coop's own code is MIT
 licensed (LICENSE.txt). No game files are included.

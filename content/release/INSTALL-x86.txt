@@ -1,11 +1,11 @@
-mw2coop {VERSION} (32-bit game, experimental): campaign co-op for Call of Duty: Modern Warfare 2 (2009), two players
+mw2coop {VERSION} (32-bit game): campaign co-op for Call of Duty: Modern Warfare 2 (2009), two players
 https://github.com/stxlvn/mw2_coop
 
 === По-русски ===
 
-Это ЭКСПЕРИМЕНТАЛЬНАЯ сборка для старой 32-битной версии MW2 из Steam (до сентябрьского обновления 2026, iw4sp.exe
+Это сборка для старой 32-битной версии MW2 из Steam (до сентябрьского обновления 2026, iw4sp.exe
 32-бит). Для актуальной 64-битной версии берите обычный архив mw2coop-<версия>.zip, для клиента iw4x-sp - архив
-mw2coop-<версия>-iw4x.zip. На любой другой сборке игры мод сам выключается и ничего не делает.
+mw2coop-<версия>-iw4x.zip (экспериментальный). На любой другой сборке игры мод сам выключается и ничего не делает.
 
 Установка (у обоих игроков): в папку игры (рядом с iw4sp.exe) положите winmm.dll и папку mw2coop из этого архива.
 Ничего из игры не заменяется. Остальное (лобби, вход, сохранения, брандмауэр, разделённый экран) как в обычном
@@ -22,9 +22,9 @@ mw2coop-<версия>-iw4x.zip. На любой другой сборке иг�
 
 === English ===
 
-This is an EXPERIMENTAL build for the older 32-bit Modern Warfare 2 on Steam (before the September 2026 update, 32-bit
+This is the build for the older 32-bit Modern Warfare 2 on Steam (before the September 2026 update, 32-bit
 iw4sp.exe). For the current 64-bit game use the normal archive mw2coop-<version>.zip, for the iw4x-sp client the
-archive mw2coop-<version>-iw4x.zip. On any other build of the game the mod switches itself off.
+archive mw2coop-<version>-iw4x.zip (experimental). On any other build of the game the mod switches itself off.
 
 Install (both players): the game folder (next to iw4sp.exe) <- winmm.dll and the mw2coop folder from this archive.
 Nothing of the game is replaced. The rest (lobby, joining, saves, firewall, split screen) works as in the normal
