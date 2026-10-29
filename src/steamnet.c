@@ -27,6 +27,15 @@
 #include "settings.h"
 #include "steamnet.h"
 
+// The Steam interfaces are C++ objects: in the 32-bit build their methods take `this` in ECX (thiscall) and a CSteamID as two stack dwords; the 64-bit build has one convention.
+#ifdef _WIN64
+#define THISCALL
+#define STEAM_DLL "steam_api64.dll"
+#else
+#define THISCALL __attribute__((thiscall))
+#define STEAM_DLL "steam_api.dll"
+#endif
+
 #define CHANNEL 7
 #define MAX_PEERS 16
 #define VIRTUAL_A 240
@@ -43,7 +52,7 @@ static void *networking(void)
 {
 	static void *(*get)(void);
 	if (!get) {
-		HMODULE h = GetModuleHandleA("steam_api64.dll");
+		HMODULE h = GetModuleHandleA(STEAM_DLL);
 		get = h ? (void *(*)(void))GetProcAddress(h, "SteamNetworking") : NULL;
 	}
 	return get ? get() : NULL;
@@ -55,11 +64,11 @@ static int steam_friend(uint64_t id)
 {
 	static void *(*get)(void);
 	if (!get) {
-		HMODULE h = GetModuleHandleA("steam_api64.dll");
+		HMODULE h = GetModuleHandleA(STEAM_DLL);
 		get = h ? (void *(*)(void))GetProcAddress(h, "SteamFriends") : NULL;
 	}
 	void *friends = get ? get() : NULL;
-	return friends && ((int (*)(void *, uint64_t))VT(friends, 5))(friends, id) == 3;
+	return friends && ((int (THISCALL *)(void *, uint64_t))VT(friends, 5))(friends, id) == 3;
 }
 
 static int peer_index(uint64_t id, int add)
@@ -94,7 +103,7 @@ int steamnet_send(const char *buf, int len, const struct sockaddr *to)
 	uint64_t id = peers[ip[3] - 1];
 	void *net = networking();
 	if (id && net)
-		((char (*)(void *, uint64_t, const void *, uint32_t, int, int))VT(net, 0))(net, id, buf, (uint32_t)len,
+		((char (THISCALL *)(void *, uint64_t, const void *, uint32_t, int, int))VT(net, 0))(net, id, buf, (uint32_t)len,
 										   P2P_SEND_UNRELIABLE, CHANNEL);
 	return 1; // handled (a virtual address never goes to the real network)
 }
@@ -105,12 +114,12 @@ int steamnet_receive(char *buf, int len, struct sockaddr *from, int *fromlen)
 		return 0;
 	void *net = networking();
 	uint32_t size = 0;
-	if (!net || !((char (*)(void *, uint32_t *, int))VT(net, 1))(net, &size, CHANNEL) || !size)
+	if (!net || !((char (THISCALL *)(void *, uint32_t *, int))VT(net, 1))(net, &size, CHANNEL) || !size)
 		return 0;
 	static char packet[2048];
 	uint64_t id = 0;
 	uint32_t got = 0;
-	if (!((char (*)(void *, void *, uint32_t, uint32_t *, uint64_t *, int))VT(net, 2))(net, packet, sizeof(packet), &got,
+	if (!((char (THISCALL *)(void *, void *, uint32_t, uint32_t *, uint64_t *, int))VT(net, 2))(net, packet, sizeof(packet), &got,
 											      &id, CHANNEL))
 		return 0;
 	int n = peer_index(id, 1);
@@ -140,24 +149,24 @@ typedef struct {
 	int id;
 } CallbackBase;
 
-static void on_session_request(void *self, void *param)
+static void THISCALL on_session_request(void *self, void *param)
 {
 	(void)self;
 	uint64_t id = *(uint64_t *)param; // P2PSessionRequest_t {CSteamID remote}
 	void *net = networking();
 	int ok = steam_friend(id);
 	if (ok && net)
-		((char (*)(void *, uint64_t))VT(net, 3))(net, id);
+		((char (THISCALL *)(void *, uint64_t))VT(net, 3))(net, id);
 	log_printf("steamnet: P2P session from %016llx %s", (unsigned long long)id, ok ? "accepted (Steam friend)" : "ignored");
 }
 
-static void on_session_request_io(void *self, void *param, char io_failure, uint64_t call)
+static void THISCALL on_session_request_io(void *self, void *param, char io_failure, uint64_t call)
 {
 	(void)io_failure, (void)call;
 	on_session_request(self, param);
 }
 
-static int session_request_size(void *self)
+static int THISCALL session_request_size(void *self)
 {
 	(void)self;
 	return 8;
@@ -170,12 +179,10 @@ static CallbackBase session_request = {callback_vtable, 0, {0}, CALLBACK_P2P_SES
 
 // 0x22dda0(localClient, hostInfo, *ip, *port), called by the Steam lobby join (0x28f1b0) only.
 // hostInfo (64 bytes): +0 the host's XUID = SteamID, +8 internal IPv4, +0xc external IPv4,
-// +0x10/+0x12 ports (see party.c). The original body is repeated below after the rewrite.
-#define RVA_STEAM_JOIN 0x22dda0
-#define RVA_PARTY_CLIENT_JOIN 0x0d7cb0
-#define RVA_PARTY_STOP 0x0d7dd0
-
-static char steam_join(int local_client, uint8_t *host_info, uint8_t *ip_out, uint16_t *port_out)
+// +0x10/+0x12 ports (see party.c). 64 bits: the original body is repeated after the rewrite.
+// 32 bits: VA 0x4090c0, cdecl (localClient, hostInfo, *ip, *port) too: it ends the co-op shutdown of an earlier session and jumps to
+// PartyClient_Join (VA 0x42fc40) with the same stack arguments, so the replacement rewrites the host info and calls the original.
+static void steam_host_info(uint8_t *host_info)
 {
 	uint64_t host;
 	memcpy(&host, host_info, 8);
@@ -189,6 +196,16 @@ static char steam_join(int local_client, uint8_t *host_info, uint8_t *ip_out, ui
 		memcpy(host_info + 0x12, &port, 2);
 		log_printf("steamnet: joining host %016llx through Steam (240.10.0.%d)", (unsigned long long)host, n + 1);
 	}
+}
+
+#ifdef _WIN64
+#define RVA_STEAM_JOIN 0x22dda0
+#define RVA_PARTY_CLIENT_JOIN 0x0d7cb0
+#define RVA_PARTY_STOP 0x0d7dd0
+
+static char steam_join(int local_client, uint8_t *host_info, uint8_t *ip_out, uint16_t *port_out)
+{
+	steam_host_info(host_info);
 	// the original 0x22dda0
 	if (base[0x52fb5c]) {
 		base[0x52fb5c] = 0;
@@ -201,6 +218,20 @@ static char steam_join(int local_client, uint8_t *host_info, uint8_t *ip_out, ui
 }
 
 static const uint8_t steam_join_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24};
+#else
+#define RVA_STEAM_JOIN 0x90c0
+
+static char (*steam_join_original)(int, uint8_t *, uint8_t *, uint16_t *);
+
+static char steam_join(int local_client, uint8_t *host_info, uint8_t *ip_out, uint16_t *port_out)
+{
+	steam_host_info(host_info);
+	return steam_join_original(local_client, host_info, ip_out, port_out);
+}
+
+// cmp byte ptr [0x88897c], 0 (the co-op running flag), the first instruction: 7 bytes, no relative operand
+static const uint8_t steam_join_bytes[] = {0x80, 0x3d, 0x7c, 0x89, 0x88, 0x00, 0x00};
+#endif
 
 void steamnet_install(void)
 {
@@ -215,14 +246,22 @@ void steamnet_install(void)
 		enabled = 0;
 		return;
 	}
+#ifdef _WIN64
 	hook_jump(at, 14, steam_join, 0x90);
+#else
+	if (!hook_function(at, steam_join_bytes, sizeof(steam_join_bytes), steam_join, (void **)&steam_join_original)) {
+		log_printf("steamnet: could not hook the Steam join at rva 0x%x, Steam relay off", RVA_STEAM_JOIN);
+		enabled = 0;
+		return;
+	}
+#endif
 
-	HMODULE h = GetModuleHandleA("steam_api64.dll");
+	HMODULE h = GetModuleHandleA(STEAM_DLL);
 	void (*reg)(void *, int) = h ? (void (*)(void *, int))GetProcAddress(h, "SteamAPI_RegisterCallback") : NULL;
 	if (reg)
 		reg(&session_request, CALLBACK_P2P_SESSION_REQUEST);
 	void *net = networking();
 	if (net)
-		((char (*)(void *, char))VT(net, 7))(net, 1); // AllowP2PPacketRelay
+		((char (THISCALL *)(void *, char))VT(net, 7))(net, 1); // AllowP2PPacketRelay
 	log_printf("steamnet: on (Steam joins go through Steam P2P, channel %d)", CHANNEL);
 }

@@ -141,10 +141,15 @@ A copy of the game from an unknown source (a repack with a Steam emulator was lo
 Ported and checked in the 32-bit build: script hook, QA channel, lobby/menus, access, net, firewall, transplant (No Russian crew),
 pool extension (fixed the airport client hang), fonts, script error logging (scrdebug32).
 
-Deliberately 64-bit only (no player-facing effect):
-- `steamnet` (Steam P2P relay): experimental, off by default, never tried with two real accounts even on 64 bits. A stub on 32 bits.
-- `shot` (screenshots from the game's D3D device): a QA aid; the 32-bit device was not found, stubbed.
-- `scrdebug` call-stack mapping: a debugging aid; 32-bit logs the error message only.
+Ported in 32 bits later (2026-10-29), after the owner asked why they were "deliberately 64-bit only":
+- `steamnet` (Steam P2P relay, steam_relay=1, off by default, still untried with two real accounts): the join function VA 0x4090c0 (cdecl, a wrapper that stops an earlier co-op session and jumps to
+  PartyClient_Join 0x42fc40) is hooked with the original called after the host info is rewritten; the Steam interface methods are thiscall (ECX = this, a CSteamID as two stack dwords),
+  the callback object is {vtable, flags +4, id +8} with thiscall methods; steam_api.dll exports SteamNetworking / SteamFriends / SteamAPI_RegisterCallback. Checked: "steamnet: on".
+- `scrdebug` call stacks: shared code in `src/scrdebug_stack.c` (function names from the compiled source, offsets from Scr_GetFunctionHandle VA 0x5018f0 cdecl, mapped back from the live position
+  VA 0x190a854 and the callers' frames: function_count 0x190a878, pointer one past the top frame 0x190a87c, frames of 0x18 bytes with the saved position first, program buffer pointer
+  0x18e3fe0); Scr_EndLoadScripts (VA 0x490180: `53 6a 02 e8` call, entered by a call and a tail jump) is patched at its start with a hand-built trampoline. Checked with QA scenario screrr:
+  "at / from" lines with file::function. Not in the iw4x-sp profile.
+Still 64-bit only: `shot` is ported (d3dcap.c); nothing else is left in this list.
 
 Open: an intermittent hang of both copies in DB_FindXAssetHeader (see `crash.c` dumpstacks; `tools/qa_pair.sh` now watches
 for it from 20 s after the start and keeps stacks in `hang-reports/`).

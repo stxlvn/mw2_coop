@@ -111,6 +111,9 @@ main()
 		case "veil":
 			veil();
 			break;
+		case "screrr":
+			screrr();
+			break;
 		case "face":
 			face();
 			break;
@@ -379,6 +382,26 @@ p1front()
 	a SetOrigin( b.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 300 + ( 0, 0, 12 ) );
 	a SetPlayerAngles( ( 0, yaw + 180, 0 ) );
 	report( "p1front placed at t " + GetTime() + " p1 " + a.origin + " p2 " + b.origin );
+}
+
+// screrr: raises a script runtime error two functions deep (a field set on an integer), to see the call stack scrdebug logs ("at" and "from" lines with file::function)
+screrr()
+{
+	wait 8;
+	report( "screrr: calling" );
+	screrr_a();
+	report( "screrr: not reached" );
+}
+
+screrr_a()
+{
+	screrr_b();
+}
+
+screrr_b()
+{
+	u = 1;
+	u.field = 2;	// a field of an integer: a runtime error
 }
 
 // veil: (native split screen test) both players face each other like in "armed"; the white haze around a body in the other player's half is checked against the game's
