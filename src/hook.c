@@ -137,3 +137,22 @@ int hook_call(uint8_t *site, void *replacement, void **original)
 	return 1;
 }
 #endif
+
+#ifndef _WIN64
+// 32 bits: every address is within reach of a relative call, so the call site goes straight to the replacement.
+int hook_call(uint8_t *site, void *replacement, void **original)
+{
+	if (site[0] != 0xe8)
+		return 0;
+	int32_t rel;
+	memcpy(&rel, site + 1, 4);
+	*original = site + 5 + rel;
+	int32_t new_rel = (int32_t)((uint8_t *)replacement - (site + 5));
+	DWORD old;
+	VirtualProtect(site, 5, PAGE_EXECUTE_READWRITE, &old);
+	memcpy(site + 1, &new_rel, 4);
+	VirtualProtect(site, 5, old, &old);
+	FlushInstructionCache(GetCurrentProcess(), site, 5);
+	return 1;
+}
+#endif

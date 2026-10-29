@@ -24,7 +24,8 @@
 #include "rumble.h"
 #include "shot.h"
 
-#ifdef _WIN64
+// Both builds compile this file; the 64-bit addresses below are used by the 64-bit build, the 32-bit ones are found in docs/32bit-native-map/ and come in piece by piece
+// (NATIVE32_READY in native_install says what is switched on).
 #define RVA_CG_DRAW 0x0bca00         // void (unsigned local_client, int, int): the cgame's frame; it calls the begin-frame below in the middle
 #define RVA_BEGIN_FRAME 0x00c840     // void (void): swaps the renderer's two frame data sets and resets their command buffers: once per frame
 #define RVA_SUBWINDOW_DVAR 0x4116158 // dvar_t *, the value (4 floats) at +0x10
@@ -34,6 +35,13 @@ static const uint8_t begin_frame_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 
 static void (*cg_draw_original)(unsigned, int, int);
 static void (*begin_frame_original)(void);
 static uint8_t *base;
+#ifdef _WIN64
+#define CTX_IP(c) ((uintptr_t)(c).Rip)
+#define CTX_SP(c) ((uintptr_t)(c).Rsp)
+#else
+#define CTX_IP(c) ((uintptr_t)(c).Eip)
+#define CTX_SP(c) ((uintptr_t)(c).Esp)
+#endif
 static char settings_path[MAX_PATH];
 static int mode;
 static int second_pass;
@@ -851,12 +859,12 @@ static DWORD WINAPI watchdog_thread(LPVOID unused)
 					if (GetThreadContext(th, &ctx)) {
 						char line[1600];
 						int n = 0;
-						const uint64_t *sp = (const uint64_t *)ctx.Rsp;
-						uint64_t addrs[1 + 400];
+						const uintptr_t *sp = (const uintptr_t *)CTX_SP(ctx);
+						uintptr_t addrs[1 + 400];
 						int na = 0;
-						addrs[na++] = ctx.Rip;
+						addrs[na++] = CTX_IP(ctx);
 						for (int i = 0; i < 400 && na < 41; i++) {
-							uint64_t v = 0;
+							uintptr_t v = 0;
 							if (!ReadProcessMemory(GetCurrentProcess(), sp + i, &v, sizeof(v), NULL))
 								break;
 							MEMORY_BASIC_INFORMATION mbi;
@@ -1807,6 +1815,7 @@ static const struct {
 	{0xd5595, 6, 2}
 };
 
+#ifdef _WIN64
 static void client_n_install(void)
 {
 	int32_t *n_client = (int32_t *)hook_page_near(base + RVA_LOCAL_PLAYERS_STORE);
@@ -1836,10 +1845,17 @@ static void client_n_install(void)
 	FlushInstructionCache(GetCurrentProcess(), base, 0xe0000);
 	log_printf("native: %d of %d client reads of the local player count point at a copy (1)", done, (int)(sizeof(client_n_sites) / sizeof(client_n_sites[0])));
 }
+#else
+static void client_n_install(void)
+{
+	log_printf("native: client_n_install is not ported to the 32-bit build yet");
+}
+#endif
 
 // The server's entity list for the snapshot leaves out the local players' entities (they are fed through the playerstate); with two local players each context would never see the other
 // one's body. The read of the player count at the start of the publisher (rva 0x23459a, `mov reg, [0x3c3eb0]`, used only for that exclusion) is pointed at a variable that is 0.
 // [native] listplayers=1.
+#ifdef _WIN64
 static void list_players_install(void)
 {
 	uint8_t *site = base + 0x23459a;
@@ -1860,6 +1876,12 @@ static void list_players_install(void)
 	FlushInstructionCache(GetCurrentProcess(), site, 8);
 	log_printf("native: the entity list keeps the local players' entities");
 }
+#else
+static void list_players_install(void)
+{
+	log_printf("native: list_players_install is not ported to the 32-bit build yet");
+}
+#endif
 
 static void (*ps_publish_original)(unsigned, const void *);
 static void (*server_cmds_original)(unsigned long long, int *);
@@ -1909,17 +1931,17 @@ static void hang_dump(const char *why)
 		HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
 		if (!th)
 			continue;
-		uint64_t addrs[40];
+		uintptr_t addrs[40];
 		int na = 0;
 		if (SuspendThread(th) != (DWORD)-1) {
 			CONTEXT ctx;
 			memset(&ctx, 0, sizeof(ctx));
 			ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
 			if (GetThreadContext(th, &ctx)) {
-				addrs[na++] = ctx.Rip;
-				const uint64_t *sp = (const uint64_t *)ctx.Rsp;
+				addrs[na++] = CTX_IP(ctx);
+				const uintptr_t *sp = (const uintptr_t *)CTX_SP(ctx);
 				for (int i = 0; i < 600 && na < 40; i++) {
-					uint64_t v = 0;
+					uintptr_t v = 0;
 					if (!ReadProcessMemory(GetCurrentProcess(), sp + i, &v, sizeof(v), NULL))
 						break;
 					MEMORY_BASIC_INFORMATION mbi;
@@ -3379,6 +3401,7 @@ static void msgwin_hook(int lc, int window, int x, int y, int horz, int vert, vo
 // Context 1 is not player 2 to that test, so the bottom half had no name over player 1. The 17 bytes from 0x93daa go to a stub that does the same test, but in context 1 the
 // client skipped is player 2 (itself): it names player 1 ([native] namefix=0 off).
 static const uint8_t name_self_bytes[] = {0x8b, 0xc7, 0x84, 0xc9, 0x74, 0x03, 0x0f, 0xb7, 0x06, 0x3b, 0xe8, 0x0f, 0x84, 0x21, 0x01, 0x00, 0x00};
+#ifdef _WIN64
 static void name_self_install(void)
 {
 	uint8_t *site = base + 0x93daa;
@@ -3409,6 +3432,12 @@ static void name_self_install(void)
 	}
 	jhook_jump(site, sizeof(name_self_bytes), stub, 0x90);
 }
+#else
+static void name_self_install(void)
+{
+	log_printf("native: name_self_install is not ported to the 32-bit build yet");
+}
+#endif
 
 // The mission's title lines (maps\_introscreen patch: sort 1.0078125 instead of 1) are drawn once, over the whole picture and as big as in single player: the HUD element draw
 // (rva 0xa3b80: local client, element; the sort at +0x88) leaves them out in context 1 and draws them in context 0 with the full-screen 2D placement, into the rows of its layer
@@ -4352,6 +4381,10 @@ static int text_pad_player(int *tactical)
 
 void native_install(void)
 {
+#ifndef _WIN64
+	log_printf("native: the 32-bit port is not switched on yet (docs/32bit-native-map/)");
+	return;
+#endif
 	char path[MAX_PATH];
 	DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
 	while (n > 0 && path[n - 1] != '\\')
@@ -4380,6 +4413,9 @@ const char *native_crash_state(void)
 
 int native_split_available(void)
 {
+#ifndef _WIN64
+	return 0;
+#endif
 	return base != NULL;
 }
 
@@ -4426,34 +4462,3 @@ void native_split_stop(void)
 	rumble_reset();
 	log_printf("native: split screen session over, the game's own player count is back");
 }
-
-#else
-void native_install(void)
-{
-}
-int native_split_available(void)
-{
-	return 0;
-}
-int native_split_active(void)
-{
-	return 0;
-}
-int native_split_start(int pad)
-{
-	(void)pad;
-	return 0;
-}
-int native_split_start2(int dev0, int dev1)
-{
-	(void)dev0, (void)dev1;
-	return 0;
-}
-const char *native_crash_state(void)
-{
-	return "none";
-}
-void native_split_stop(void)
-{
-}
-#endif
