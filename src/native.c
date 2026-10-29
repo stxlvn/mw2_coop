@@ -3282,8 +3282,15 @@ static float wait_alpha_hook(int lc)
 	static int logged;
 	if ((a != 0.0f || !logged) && logged < 5) {
 		logged++;
+#ifdef _WIN64
 		log_printf("native: waiting alpha for lc %d = %f (coop byte %d, cls %d)", lc, a, *(base + 0x52fb5c), *(int *)(base + 0x533cb8));
+#else
+		log_printf("native: waiting alpha for lc %d = %f", lc, (double)a);
+#endif
 	}
+	// Both players are on this PC: nobody waits for the other (the message showed while level loading, until context 1's client state caught up, 2026-10-29: owner). [native] waitmsg=1 shows it again.
+	if (native_active && !cfg("waitmsg", 0))
+		return 0.0f;
 	return a;
 }
 
