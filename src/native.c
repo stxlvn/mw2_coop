@@ -2379,6 +2379,16 @@ static void xfer_hook(void *src, void *dest, unsigned t)
 	xfer_original(src, dest, t);
 }
 
+// The feet of an actor are adjusted to the ground by rva 0x89780 (state per entity in the cgame block at rva 0x440770, 0x48 bytes each, so each context has its own
+// smoothed state) applied to the shared client DObj: both contexts adjust the same feet each frame with their own state. [native] ikskip=1: context 1 leaves them alone.
+static void (*ik_original)(void *, void *);
+static void ik_hook(void *ent, void *dobj)
+{
+	if (ctx_current == 1 && native_active && CFG_ONCE("ikskip", 0))
+		return;
+	ik_original(ent, dobj);
+}
+
 // ---- aim assist for a pad player, the console game's: this PC build left its code out but keeps its data. The cgame fills a list of the targets on the screen
 // each frame (aaGlob[0], rva 0x3cf180, by rva 0x6a570 from the view at 0xbd2c5; one per context: it is in the swapped ranges), and the mouse move (0xcfcf0) computes
 // the regions of the aim_* dvars into it (0x6a350, before its auto melee 0x685c0). On that list, like the console: the turn slows down over a target (aim_slowdown_*),
@@ -3474,6 +3484,49 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			at = GetTickCount();
 		}
 	}
+	if (a && CFG_ONCE("treelog", 0) && (c & 0xffff) >= 2 && (c & 0xffff) < 2048 && ctx_current == 0 && !IsBadReadPtr(a, 0xb0)) { // QA: the animation tree nodes of Price, ten times a second (split or plain game)
+		const uint8_t *dobj = (const uint8_t *)a;
+		int nm = dobj[0xd];
+		const uint8_t *const *models = *(const uint8_t *const **)(dobj + 0xa8);
+		const char *name = nm > 0 && models && models[0] && !IsBadReadPtr(models[0], 8) && !IsBadReadPtr(*(const char *const *)models[0], 4) ? *(const char *const *)models[0] : "";
+		static DWORD at;
+		static int ent = -1;
+		static float first[2048][3];
+		static uint8_t seen[2048];
+		if (ent < 0 && strncmp(name, "body_", 5) == 0 && e && !IsBadReadPtr(e, 12)) { // the first character that walks away from where it was first drawn: Price or a squad mate in the first seconds
+			const float *o = (const float *)e;
+			unsigned k = c & 0xffff;
+			if (!seen[k])
+				seen[k] = 1, memcpy(first[k], o, sizeof(first[k]));
+			else if ((o[0] - first[k][0]) * (o[0] - first[k][0]) + (o[1] - first[k][1]) * (o[1] - first[k][1]) > 150.0f * 150.0f) {
+				ent = (int)k;
+				log_printf("native: treelog follows entity %d (%s)", ent, name);
+			}
+		}
+		if (ent == (int)(c & 0xffff) && GetTickCount() - at >= 50 && e && !IsBadReadPtr(e, 12)) {
+			at = GetTickCount();
+			const uint8_t *tree = *(const uint8_t *const *)dobj;
+			int idx = tree && !IsBadReadPtr(tree, 16) ? *(const short *)(tree + 8) : 0;
+			char line[1500];
+			const float *org = (const float *)e;
+			int len = snprintf(line, sizeof(line), "native: tree t=%lu ent %d idx %d pos %.1f %.1f:", (unsigned long)GetTickCount(), ent, idx, e ? org[0] : 0.0f, e ? org[1] : 0.0f);
+			for (int k = 0; idx > 0 && k < 5 && len < (int)sizeof(line) - 200; k++) {
+				const uint8_t *node = base + 0x1bc0a30 + (size_t)idx * 0x40;
+				const float *f = (const float *)node;
+				len += snprintf(line + len, sizeof(line) - len, " [n%d", idx);
+				for (int j = 0; j < 16; j++) {
+					float v = f[j];
+					if (v != 0 && fabsf(v) > 1e-6f && fabsf(v) < 1e6f)
+						len += snprintf(line + len, sizeof(line) - len, " %x:%.3f", j * 4, v);
+					else if (((const uint32_t *)node)[j])
+						len += snprintf(line + len, sizeof(line) - len, " %x:#%x", j * 4, ((const uint32_t *)node)[j]);
+				}
+				len += snprintf(line + len, sizeof(line) - len, "]");
+				idx = *(const uint16_t *)(node + 0xc); // the first child
+			}
+			log_printf("%s", line);
+		}
+	}
 	if (ctx_current == 0 && (c & 0xffff) == 1)
 		p0cnt_flags0 = d;
 	if (CFG_ONCE("p0cnt", 0) >= 2 && ((ctx_current == 0 && (c & 0xffff) == 1) || (ctx_current == 1 && (c & 0xffff) == 0))) {
@@ -3966,6 +4019,8 @@ static void contexts_install(void)
 			log_printf("native: add entity bytes differ");
 		if (!jhook_function(base + 0xb0680, pass2_bytes, sizeof(pass2_bytes), pass2_hook, (void **)&pass2_original))
 			log_printf("native: second entity pass bytes differ");
+		if (!jhook_call(base + 0x896d3, ik_hook, (void **)&ik_original))
+			log_printf("native: no call at the foot adjustment");
 		if (!jhook_function(base + 0x29a120, xfer_bytes, sizeof(xfer_bytes), xfer_hook, (void **)&xfer_original))
 			log_printf("native: DObj transfer bytes differ");
 		if (!jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
@@ -4181,6 +4236,8 @@ void native_install(void)
 	for (size_t i = 0; i < sizeof(native_commands) / sizeof(native_commands[0]); i++)
 		game_add_command(&native_commands[i]);
 	padglyphs_install(text_pad_player);
+	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
+		log_printf("native: dobj add bytes differ (treelog in the plain game)");
 	// the QA runs: settings.ini [native] players=2 starts the session at once (the menu's button does it later, native_split_start)
 	int players = cfg("players", 0);
 	if (players >= 2)
