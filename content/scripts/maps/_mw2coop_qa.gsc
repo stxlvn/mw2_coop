@@ -105,6 +105,9 @@ main()
 		case "p2away":
 			p2away();
 			break;
+		case "p2walk":
+			p2walk();
+			break;
 		case "face":
 			face();
 			break;
@@ -373,6 +376,28 @@ p1front()
 	a SetOrigin( b.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 300 + ( 0, 0, 12 ) );
 	a SetPlayerAngles( ( 0, yaw + 180, 0 ) );
 	report( "p1front placed at t " + GetTime() + " p1 " + a.origin + " p2 " + b.origin );
+}
+
+// p2walk: (native split screen test) player 1 stands, player 2 walks forward / back / left / right on the pad dvar from 15 s on (1.5 s each, three rounds), the mod's follow and
+// leash off; a composed frame every second with both players' server positions (p1front_frames): does player 2's body move in player 1's half when his camera does?
+p2walk()
+{
+	thread p1front_frames();
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 15;
+	for ( r = 0; r < 3; r++ )
+	{
+		SetDvar( "mw2coop_qa_pad2", "0 32767 0 0 0 0 0 0" );
+		wait 1.5;
+		SetDvar( "mw2coop_qa_pad2", "0 -32767 0 0 0 0 0 0" );
+		wait 1.5;
+		SetDvar( "mw2coop_qa_pad2", "-32767 0 0 0 0 0 0 0" );
+		wait 1.5;
+		SetDvar( "mw2coop_qa_pad2", "32767 0 0 0 0 0 0 0" );
+		wait 1.5;
+	}
+	SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
 }
 
 // p2away: (native split screen test) player 2 is put about 350 units away from where he starts, on free ground (the mod's follow and leash are off), 25 s into the level:
