@@ -32,6 +32,11 @@ static const struct {
 #define RVA_DVAR_REGISTER_FLOAT 0x26cb90 // dvar_t *(const char *name, float value, float min, float max, unsigned flags, const char *description)
 #define RVA_AIM_DVARS 0x3cf050		 // the aim_* dvars: aim_aimAssistRangeScale (0x3cf050) ... aim_scale_view_axis (0x3cf178)
 #define RVA_AIM_DVARS_END 0x3cf180
+#else
+#define RVA_DVAR_REGISTER_BOOL 0x866b0   // VA 0x4866b0, cdecl, the value is a byte at [esp+8] (docs/32bit-native-map/inputui.md)
+#define RVA_DVAR_REGISTER_FLOAT 0x9f700  // VA 0x49f700, cdecl
+extern const uint32_t aim_dvar_rvas32[38]; // native.c: where each aim_* dvar_t * lives in 32 bits (scattered, not one block)
+#endif
 #define DVAR_ARCHIVE 1
 #define DVAR_CHEAT 4
 #define ITEM_TYPE_SLIDER 10
@@ -61,8 +66,13 @@ static void unlock_aim_dvars(void)
 {
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	int unlocked = 0;
+#ifdef _WIN64
 	for (uint32_t rva = RVA_AIM_DVARS; rva < RVA_AIM_DVARS_END; rva += 8) {
 		dvar_t *d = *(dvar_t **)(base + rva);
+#else
+	for (int i = 0; i < 38; i++) {
+		dvar_t *d = *(dvar_t **)(base + aim_dvar_rvas32[i]);
+#endif
 		if (d && (d->flags & DVAR_CHEAT)) {
 			d->flags &= ~DVAR_CHEAT;
 			unlocked++;
@@ -236,16 +246,3 @@ void padopts_tick(void)
 	add_page(1);
 	patch_controls();
 }
-#else
-void padopts_get(int player, padopts_t *out)
-{
-	(void)player;
-	out->sens = opts[OPT_SENS].def;
-	out->invert = out->southpaw = out->tactical = 0;
-	out->assist = out->rumble = 1;
-}
-
-void padopts_tick(void)
-{
-}
-#endif
