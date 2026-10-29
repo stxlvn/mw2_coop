@@ -185,8 +185,8 @@ static uint8_t *base;
 #define WD_AUTO_RANGE 0x2e0
 #define WEAPON_DEF(w) (*(const uint8_t *const *)(base + 0x1669d08 + (size_t)(w) * 4)) // the table of weapon def pointers
 #define RVA_CG_ASPECT 0x35f018
-#define RVA_PIXEL_ASPECT 0x108edb8
-#define RVA_VIDEO_ASPECT 0x108edb4
+#define RVA_PIXEL_ASPECT 0x188edb8
+#define RVA_VIDEO_ASPECT 0x188edb4
 #define RVA_WAIT_ALPHA_SITE 0x15ef17
 #define RVA_ENT_FLAGS 0x46b280
 #define RVA_CLIENT_DOBJ 0xf3c70
@@ -5186,14 +5186,10 @@ void native_install(void)
 	base = (uint8_t *)GetModuleHandleA(NULL);
 #ifndef _WIN64
 	// the 32-bit port is switched on piece by piece: experiment=2 (alternate frames, compositor), then players=2 with experiment=5 (two client contexts)
-	if (cfg("players", 0) < 2) {
-		if (cfg("experiment", 0) == 2) {
-			mode = 2;
-			hooks_apply32();
-			log_printf("native: 32-bit experiment 2 %s", hooks_ok ? "on" : "failed");
-		} else {
-			log_printf("native: the 32-bit port is off ([native] experiment=2 or players=2 experiment=5)");
-		}
+	if (cfg("players", 0) < 2 && cfg("experiment", 0) == 2) {
+		mode = 2;
+		hooks_apply32();
+		log_printf("native: 32-bit experiment 2 %s", hooks_ok ? "on" : "failed");
 		return;
 	}
 #endif
@@ -5221,10 +5217,23 @@ const char *native_crash_state(void)
 
 int native_split_available(void)
 {
-#ifndef _WIN64
-	return 0;
-#endif
 	return base != NULL;
+}
+
+// One key press for the split screen lobby's pad (menus.c mw2coop_menukey): the engine's key event, down and up
+void native_menu_key(int key)
+{
+	unsigned t = (unsigned)GetTickCount();
+#ifdef _WIN64
+	((void (*)(int, int, int, unsigned))(base + 0xd0f80))(0, key, 1, t);
+	((void (*)(int, int, int, unsigned))(base + 0xd0f80))(0, key, 0, t);
+#else
+	if (!key_event_original)
+		return;
+	key_event_original(0, key, 1, t);
+	key_event_original(0, key, 0, t);
+	cbuf_run_now();
+#endif
 }
 
 int native_split_active(void)

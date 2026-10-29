@@ -17,7 +17,7 @@ if [ "$1" = x86 ]; then
 	OUT=build/x86; DEF=
 	if [ "$2" = iw4x ]; then OUT=build/x86-iw4x; DEF=-DMW2COOP_IW4X; fi
 	mkdir -p $OUT
-	"$CC32" -O2 $STRIP -Wall -Wextra $DEF -shared -static -static-libgcc -Isrc/x86 -Isrc -o $OUT/winmm.dll 		src/x86/main32.c src/x86/stubs32.c src/log.c src/proxy.c src/hooks.c src/hook.c src/game.c src/scripts.c src/zones.c 		src/control.c src/party.c src/settings.c src/upnp.c src/crash.c src/fov.c src/mirror.c src/localize.c src/progress.c src/fonts.c src/splitscreen.c src/instance.c src/native.c src/menus.c src/padopts.c src/padglyphs.c src/rumble.c src/access.c src/net.c src/firewall.c src/memdump.c src/transplant.c src/shot.c src/d3dcap.c src/x86/scrdebug32.c src/x86/winmm_stubs.S src/x86/winmm.def -lbcrypt -lws2_32 -liphlpapi -lgdi32
+	"$CC32" -O2 $STRIP -Wall -Wextra $DEF -shared -static -static-libgcc -Isrc/x86 -Isrc -o $OUT/winmm.dll 		src/x86/main32.c src/x86/stubs32.c src/log.c src/proxy.c src/hooks.c src/hook.c src/game.c src/scripts.c src/zones.c 		src/control.c src/party.c src/settings.c src/upnp.c src/crash.c src/fov.c src/mirror.c src/localize.c src/progress.c src/fonts.c src/splitscreen.c src/instance.c src/native.c src/menus.c src/padicon.c src/padopts.c src/padglyphs.c src/rumble.c src/access.c src/net.c src/firewall.c src/memdump.c src/transplant.c src/shot.c src/d3dcap.c src/x86/scrdebug32.c src/x86/winmm_stubs.S src/x86/winmm.def -lbcrypt -lws2_32 -liphlpapi -lgdi32
 	echo "built $OUT/winmm.dll"
 	exit 0
 fi

@@ -835,7 +835,6 @@ static int item_by_text(uint8_t *menu, const char *text, const LobbySwap *w)
 	return -1;
 }
 
-#ifdef _WIN64
 // The native split screen lobby: both players are on this PC. The title says split screen instead of online, the rows that only an online lobby needs are hidden
 // (invite a friend, access, password, the network type), and each player's card shows the picture of his device (keyboard and mouse, a gamepad, none before he has
 // pressed). Everything goes back when the lobby is an online one again. The cards' pictures are the two 64 x 64 items at x -176 (y 70: player 1, y 148: player 2), whose
@@ -889,6 +888,10 @@ static void patch_split_lobby(uint8_t *menu)
 			int d = instance_device(pl);
 			shown = d != DEVICE_NONE; // no picture before the player has pressed a button on his device
 			want = d >= 0 ? (uint8_t *)padicon_material(kb_material) : kb_material;
+#ifndef _WIN64
+			if (d < 0) // 32 bits: the game has no keyboard and mouse picture for the card (an empty box): it is drawn here
+				want = (uint8_t *)padicon_keyboard_material(kb_material);
+#endif
 			if (!want)
 				want = kb_material; // (the gamepad picture is made once the keyboard's texture is there)
 		}
@@ -928,7 +931,6 @@ static void patch_split_lobby(uint8_t *menu)
 	}
 	split_was = split;
 }
-#endif
 
 static void patch_lobby(int campaign)
 {
@@ -963,9 +965,7 @@ static void patch_lobby(int campaign)
 		}
 	}
 	patch_lobby_mission(menu, campaign);
-#ifdef _WIN64
 	patch_split_lobby(menu);
-#endif
 	if (changed || campaign != lobby_campaign_set)
 		log_printf("menus: coop_lobby set for %s", campaign ? "a campaign mission" : "Spec Ops");
 	lobby_campaign_set = campaign;
@@ -1597,36 +1597,72 @@ static void devmap_f(void)
 
 static void tick_f(void);
 
-#ifdef _WIN64
 // ---- the native split screen lobby: both players' cards, player 1's pad in the menus
 // The lobby's player cards come from the menu expression coopPlayerInfo(n, field) (rva 0x2442b0: local client, its arguments (count at [0x28], n as int / float / string at
 // [0]/[2], the field via rva 0x2447c0 on [4]), the result {type at [0] (0 a number, 2 a string), value at [2]}). In a split screen lobby both players are there from the
 // start, by their call signs (owner, 2026-10-28): Alpha (player 1, the top half) and Bravo (player 2); Start still waits for each to press a button on his device.
+#ifdef _WIN64
 static void (*player_info_original)(int, int *, int *);
 static const uint8_t player_info_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89,
 					    0x74, 0x24, 0x20, 0x41, 0x56, 0x48, 0x83, 0xec, 0x30};
+#define PI_COUNT 0x28 // the arguments: count, then {type, value} of 16 bytes
+#define PI_STRIDE 4	  // (ints)
+#define PI_VALUE 2
+#else
+// 32 bits (docs/32bit-native-map/inputui.md): usercall, ESI = the out struct, stack (lc, args); the arguments are {type, value} of 8 bytes, the count at +0x50; the result {type, value}
+static void *player_info_target;
+static const uint8_t player_info_bytes[] = {0x83, 0xec, 0x08, 0x53, 0x33, 0xdb};
+#define PI_COUNT 0x14
+#define PI_STRIDE 2
+#define PI_VALUE 1
+static void player_info_original(int lc, int *args, int *out)
+{
+	__asm__ volatile("pushl %1\n\tpushl %2\n\tcall *%3\n\taddl $8, %%esp" : "+S"(out) : "r"(args), "r"(lc), "m"(player_info_target) : "eax", "ecx", "edx", "memory", "cc");
+}
+#endif
 static void player_info_hook(int lc, int *args, int *out)
 {
 	player_info_original(lc, args, out);
-	if (!(split_mode && native_split_available()) || args[0x28] != 2)
+	if (!(split_mode && native_split_available()) || args[PI_COUNT] != 2)
 		return;
-	int n = args[0] == 1 ? (int)*(const float *)(args + 2) : args[0] == 0 ? args[2] : atoi(*(const char **)(args + 2));
+	int n = args[0] == 1 ? (int)*(const float *)(args + PI_VALUE) : args[0] == 0 ? args[PI_VALUE] : atoi(*(const char **)(args + PI_VALUE));
 	if (n < 0 || n > 1)
 		return;
+#ifdef _WIN64
 	const char *field = ((const char *(*)(int *))(base + 0x2447c0))(args + 4);
+#else
+	const char *field = args[PI_STRIDE] == 2 ? *(const char **)(args + PI_STRIDE + 1) : NULL; // the field name is a string argument (the engine's text function returns it as it is)
+#endif
 	if (!field)
 		return;
 	if (!strcmp(field, "exists")) {
 		out[0] = 0;
-		out[2] = 1;
+		out[PI_VALUE] = 1;
 	} else if (!strcmp(field, "name")) {
 		static char names[2][32];
 		const char *t = localize_text(n ? "MW2COOP_CALLSIGN_B" : "MW2COOP_CALLSIGN_A");
 		snprintf(names[n], sizeof(names[n]), "%s", t ? t : n ? "Bravo" : "Alpha");
 		out[0] = 2;
-		*(const char **)(out + 2) = names[n];
+		*(const char **)(out + PI_VALUE) = names[n];
 	}
 }
+#ifndef _WIN64
+void n32_player_info_hook(int lc, int *args, int *out);
+void n32_player_info_hook(int lc, int *args, int *out)
+{
+	player_info_hook(lc, args, out);
+}
+__asm__(".text\n"
+	".globl _n32_player_info_stub\n"
+	"_n32_player_info_stub:\n"
+	"	pushl %esi\n"
+	"	pushl 12(%esp)\n"
+	"	pushl 12(%esp)\n"
+	"	call _n32_player_info_hook\n"
+	"	addl $12, %esp\n"
+	"	ret\n");
+extern char n32_player_info_stub[];
+#endif
 
 // Player 1 works the lobby; on a pad, his pad does it: a thread reads it 60 times a second and queues the keys a menu knows (mw2coop_menukey: the engine's key event,
 // rva 0xd0f80, on the main thread). D-pad / left stick: arrows (a held direction again after 400 ms, then every 120 ms), A: Enter, B: Escape. Back is the lobby's
@@ -1636,9 +1672,7 @@ static void menukey_f(void)
 	int key = atoi(game_cmd_argv(1));
 	if (key <= 0 || key > 255 || !base)
 		return;
-	unsigned t = (unsigned)GetTickCount();
-	((void (*)(int, int, int, unsigned))(base + 0xd0f80))(0, key, 1, t);
-	((void (*)(int, int, int, unsigned))(base + 0xd0f80))(0, key, 0, t);
+	native_menu_key(key);
 }
 static DWORD WINAPI lobby_pad_thread(LPVOID unused)
 {
@@ -1708,7 +1742,6 @@ static DWORD WINAPI lobby_pad_thread(LPVOID unused)
 	}
 	return 0;
 }
-#endif
 
 static cmd_function_t commands[] = {
 	{NULL, "mw2coop_online", NULL, NULL, online_f CMD_NODE_FLAG},
@@ -1719,9 +1752,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_host_new", NULL, NULL, host_new_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_host_pick", NULL, NULL, host_pick_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_start", NULL, NULL, start_f CMD_NODE_FLAG},
-#ifdef _WIN64
 	{NULL, "mw2coop_menukey", NULL, NULL, menukey_f CMD_NODE_FLAG},
-#endif
 	{NULL, "mw2coop_ready", NULL, NULL, ready_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_partner_yes", NULL, NULL, partner_yes_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_member_yes", NULL, NULL, member_yes_f CMD_NODE_FLAG},
@@ -1860,8 +1891,12 @@ void menus_install(void)
 	if (memcmp(base + 0x2442b0, player_info_bytes, sizeof(player_info_bytes)) ||
 	    !hook_function(base + 0x2442b0, player_info_bytes, sizeof(player_info_bytes), player_info_hook, (void **)&player_info_original))
 		log_printf("menus: coopPlayerInfo not hooked (bytes differ)");
-	CreateThread(NULL, 0, lobby_pad_thread, NULL, 0, NULL);
+#else
+	if (memcmp(base + 0x21c430, player_info_bytes, sizeof(player_info_bytes)) ||
+	    !hook_function(base + 0x21c430, player_info_bytes, sizeof(player_info_bytes), n32_player_info_stub, &player_info_target))
+		log_printf("menus: coopPlayerInfo not hooked (bytes differ)");
 #endif
+	CreateThread(NULL, 0, lobby_pad_thread, NULL, 0, NULL);
 	// devmap is a server command: the console node's function is empty and the command goes on
 	// to this node (Cmd_AddServerCommand in SV_AddOperatorCommands, rva 0x22bef0)
 	cmd_function_t *sv_devmap = (cmd_function_t *)(base + RVA_SV_CMD_DEVMAP);

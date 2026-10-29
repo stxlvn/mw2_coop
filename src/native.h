@@ -8,6 +8,8 @@ void native_install(void);
 int native_split_available(void);
 // 1 while a session runs
 int native_split_active(void);
+// One key press (down and up) through the engine's key event, for the split screen lobby's pad
+void native_menu_key(int key);
 // The Start of a split screen lobby: the game becomes a two local players game; the caller launches the mission. pad: the XInput pad of the second player, -1 none. Returns 1 on success.
 int native_split_start(int pad);
 int native_split_start2(int dev0, int dev1); // each player's device: an XInput pad 0-3, or -1 the keyboard and mouse
