@@ -394,6 +394,12 @@ p2away()
 			continue;
 		b SetOrigin( ground );
 		report( "p2away moved to " + ground + " angle " + a );
+		// then player 1 stands 250 units in front of him, facing him, so that each half shows the other player's body
+		wait 2;
+		yaw = b GetPlayerAngles()[ 1 ];
+		level.player SetOrigin( b.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 250 + ( 0, 0, 12 ) );
+		level.player SetPlayerAngles( ( 0, yaw + 180, 0 ) );
+		report( "p2away: player 1 placed " + level.player.origin + " p2 " + b.origin + " p2 server yaw " + yaw + " p1 yaw " + level.player GetPlayerAngles()[ 1 ] );
 		return;
 	}
 	report( "p2away found no free spot" );

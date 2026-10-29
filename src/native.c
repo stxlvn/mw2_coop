@@ -1655,8 +1655,13 @@ static void cg_draw_hook(unsigned local_client, int a, int b)
 	if (CFG_ONCE("viewlog", 0) && ctx_on) {
 		static unsigned vn;
 		if (++vn % 25 == 0 && vn < 20000) {
+#ifdef _WIN64
 			const uint8_t *ps = base + 0x422440;
+#else
+			const uint8_t *ps = base + RVA_CL_PS; // (32 bits: the cgame's own copy was not looked for; the client block's copy is the one the next frame is predicted from)
+#endif
 			const unsigned *d = (const unsigned *)(ps + 0x100);
+			log_printf("native: viewlog origin ctx %d: %.1f %.1f %.1f", ctx_current, (double)*(float *)(ps + 0x1c), (double)*(float *)(ps + 0x20), (double)*(float *)(ps + 0x24));
 			log_printf("native: viewlog ctx %d cg.ps pitch %.1f yaw %.1f roll %.1f | acc pitch %.1f yaw %.1f | cl.ps yaw %.1f | ps+100: %08x %08x %08x %08x %08x %08x %08x %08x", ctx_current,
 				   (double)*(float *)(ps + 0x108), (double)*(float *)(ps + 0x10c), (double)*(float *)(ps + 0x110), (double)*(float *)(base + RVA_ACC_PITCH), (double)*(float *)(base + RVA_ACC_PITCH + 4),
 				   (double)*(float *)(base + RVA_CL_PS + 0x10c), d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
@@ -4196,6 +4201,14 @@ static void own_write_hook(unsigned lc)
 		return;
 	}
 	own_write_original(lc);
+#ifndef _WIN64
+	// 32 bits: context 0's entity pass never hands entity 0 (the local player) to add_entity_hook, so player 1's entity is taken here, right after the cgame has written his
+	// origin and angles into slot 0 (the 64-bit capture in add_entity_hook runs for n == 0)
+	if (ctx_current == 0 && lc == 0) {
+		memcpy(p0_ent, base + RVA_CENT, sizeof(p0_ent));
+		p0_ent_ok = 1;
+	}
+#endif
 }
 
 static void add_entity_hook(int n)
@@ -4278,8 +4291,8 @@ static void add_entity_hook(int n)
 				static unsigned pl;
 				const uint8_t *e = base + RVA_CENT;
 				if (++pl % 10 == 0 && pl < 30000)
-					log_printf("native: p0log ctx1 draws entity0: ok %d copied %d pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x | own p2 pos %.1f %.1f", p0_ent_ok, p0copy, (double)((const float *)e)[63], (double)((const float *)e)[64], (double)((const float *)e)[65],
-						   (double)((const float *)e)[73], e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS), *(const unsigned *)(e + CENT_VALID), (double)*(const float *)(base + 0x42245c), (double)*(const float *)(base + 0x422460));
+					log_printf("native: p0log ctx1 draws entity0: ok %d copied %d pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x | own p2 pos %.1f %.1f", p0_ent_ok, p0copy, (double)((const float *)e)[CF_ORG2], (double)((const float *)e)[CF_ORG2 + 1], (double)((const float *)e)[CF_ORG2 + 2],
+						   (double)((const float *)e)[CF_YAW2], e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS), *(const unsigned *)(e + CENT_VALID), (double)*(const float *)(base + 0x42245c), (double)*(const float *)(base + 0x422460));
 			}
 			if (n == 0)
 				lag_record();
@@ -4302,8 +4315,8 @@ static void add_entity_hook(int n)
 			if (CFG_ONCE("p0log", 0)) { // what context 0's draw hands over as player 1's entity
 				static unsigned cl0;
 				if (++cl0 % 10 == 0 && cl0 < 30000)
-					log_printf("native: p0log ctx0 captured entity0: pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x", (double)((const float *)p0_ent)[63], (double)((const float *)p0_ent)[64], (double)((const float *)p0_ent)[65],
-						   (double)((const float *)p0_ent)[73], p0_ent[CENT_TYPE], *(const unsigned *)(p0_ent + CENT_FLAGS), *(const unsigned *)(p0_ent + CENT_VALID));
+					log_printf("native: p0log ctx0 captured entity0: pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x", (double)((const float *)p0_ent)[CF_ORG2], (double)((const float *)p0_ent)[CF_ORG2 + 1], (double)((const float *)p0_ent)[CF_ORG2 + 2],
+						   (double)((const float *)p0_ent)[CF_YAW2], p0_ent[CENT_TYPE], *(const unsigned *)(p0_ent + CENT_FLAGS), *(const unsigned *)(p0_ent + CENT_VALID));
 			}
 		}
 		lag_fix_yaw(n, 1, sv, &ap); // player 1's body in context 0's picture
