@@ -4047,7 +4047,9 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 		if (c == 0 || ++seen % 1 == 0) {
 			if (seen < 5000 && seen > 800) {
 				const float *o = (const float *)b;
-				{ const float *p = (const float *)e; static const float zero[CENT_SIZE / 4]; const float *eo = (c & 0xffff) < 64 ? (const float *)(base + RVA_CENT + (size_t)(c & 0xffff) * CENT_SIZE) : zero; log_printf("native: dobj add ctx1 ent %u flags %08x draw %.1f %.1f %.1f | slot %.1f %.1f %.1f yaw %.1f", c & 0xffff, d, p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, eo[63], eo[64], eo[65], eo[73]); (void)o; }
+				{ const float *p = (const float *)e; static const float zero[CENT_SIZE / 4]; const float *eo = (c & 0xffff) < 64 ? (const float *)(base + RVA_CENT + (size_t)(c & 0xffff) * CENT_SIZE) : zero; const char *mname = "?";
+				if (a && !IsBadReadPtr(a, 0xb0)) { const uint8_t *dj = (const uint8_t *)a; const uint8_t *const *mm = *(const uint8_t *const **)(dj + DOBJ_MODELS); if (dj[DOBJ_NUMMODELS] && mm && !IsBadReadPtr(mm, 4) && mm[0] && !IsBadReadPtr(mm[0], 8) && *(const char *const *)mm[0] && !IsBadReadPtr(*(const char *const *)mm[0], 4)) mname = *(const char *const *)mm[0]; }
+				log_printf("native: dobj add ctx1 ent %u flags %08x draw %.1f %.1f %.1f | model %s", c & 0xffff, d, p ? p[0] : 0, p ? p[1] : 0, p ? p[2] : 0, mname); (void)o; }
 			}
 		}
 		(void)frame;

@@ -102,6 +102,9 @@ main()
 		case "p1front":
 			p1front();
 			break;
+		case "p2away":
+			p2away();
+			break;
 		case "face":
 			face();
 			break;
@@ -370,6 +373,30 @@ p1front()
 	a SetOrigin( b.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 300 + ( 0, 0, 12 ) );
 	a SetPlayerAngles( ( 0, yaw + 180, 0 ) );
 	report( "p1front placed at t " + GetTime() + " p1 " + a.origin + " p2 " + b.origin );
+}
+
+// p2away: (native split screen test) player 2 is put about 350 units away from where he starts, on free ground (the mod's follow and leash are off), 25 s into the level:
+// does a prop near his start (the rifle on the Trainer's table) keep its size in his half? A composed frame every second as in p1front.
+p2away()
+{
+	thread p1front_frames();
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	wait 25;
+	b = level.player2;
+	for ( a = 0; a < 360; a += 45 )
+	{
+		spot = b.origin + AnglesToForward( ( 0, a, 0 ) ) * 350;
+		if ( !BulletTracePassed( b.origin + ( 0, 0, 48 ), spot + ( 0, 0, 48 ), false, b ) )
+			continue;
+		ground = PlayerPhysicsTrace( spot + ( 0, 0, 48 ), spot - ( 0, 0, 96 ) );
+		if ( abs( ground[ 2 ] - b.origin[ 2 ] ) > 40 )
+			continue;
+		b SetOrigin( ground );
+		report( "p2away moved to " + ground + " angle " + a );
+		return;
+	}
+	report( "p2away found no free spot" );
 }
 
 p1front_frames()
