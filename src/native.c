@@ -66,6 +66,7 @@ static uint8_t *base;
 #define SLOT_STRIDE 0x2650
 #define RVA_SV_CLIENT_THINK 0x22d000 // void (int lc, const usercmd_t *): copies the cmd into client_t[lc] + 0x1630 and runs the player's think
 #define RVA_KEY_CATCHERS 0x533cb0
+#define RVA_CLS_STATE 0x533cb8
 #define RVA_ACC_PITCH 0x533d14 // the live view angle accumulators (pitch, then yaw)
 #define ACC_IN_CLS (0x533d14 - 0x533cb8)
 #define RVA_CG_CLIENTNUM 0x40caa0 // the cgame's copy of the client number; +4: its local client number
@@ -95,6 +96,7 @@ static uint8_t *base;
 #define SLOT_STRIDE 0x263c
 #define RVA_SV_CLIENT_THINK 0xe7750
 #define RVA_KEY_CATCHERS 0x525bb8
+#define RVA_CLS_STATE 0x525bc0
 #define RVA_ACC_PITCH 0x525c34
 #define ACC_IN_CLS (0x525c34 - 0x525bc0)
 #define RVA_CG_CLIENTNUM 0x35f2a0
@@ -1435,6 +1437,7 @@ static void begin_frame_hook(void)
 	begin_frame_original();
 }
 
+static unsigned cg_draw_count, hook_counts[8]; // QA counters: snapshot take, ps publish, server step, usercmd step, snapshot msg, server cmds
 static int ctx_on;
 static float cg_aspect_saved;
 static int cg_aspect_have;
@@ -1512,6 +1515,7 @@ static void p0dump_diff(const char *what, const uint8_t *a, const uint8_t *b, in
 static float p0cnt_draw_org[3], p0cnt_draw_org_b[3]; // the two origins the last two adds of entity 0 were given (5th argument and the pose at rdx) // [native] p0cnt=1: context 1's draws, and the adds of entity 0's DObj to its scene, per second
 static void cg_draw_hook(unsigned local_client, int a, int b)
 {
+	cg_draw_count++;
 	float *sw = subwindow();
 	if (split_on)
 		scan_place();
@@ -2090,6 +2094,7 @@ static void cg_init_all_hook(void)
 
 static void snapshot_take_hook(void)
 {
+	hook_counts[0]++;
 	run_both(snapshot_take_original);
 }
 
@@ -2244,6 +2249,7 @@ static void ctx_after_draw(void)
 #define PS_SIZE 0xaca4
 static void ps_publish_hook(unsigned lc, const void *ps)
 {
+	hook_counts[1]++;
 	if (lc == 0 && ctx_current == 0)
 		return ps_publish_original(0, ps);
 	ctx_ensure();
@@ -2254,6 +2260,7 @@ static void ps_publish_hook(unsigned lc, const void *ps)
 
 static void server_cmds_hook(uintptr_t lc, int *msg)
 {
+	hook_counts[5]++;
 	if ((int)lc != 0)
 		return; // client 1 gets no server commands yet
 	int was = ctx_current;
@@ -2267,6 +2274,7 @@ static void server_cmds_hook(uintptr_t lc, int *msg)
 // The server's snapshot message (entities, as shared lists) is parsed into the client's snapshot ring: once for each context, the message read again from its start.
 static void snapshot_msg_hook(void *msg, int time)
 {
+	hook_counts[4]++;
 	int was = ctx_current;
 	if (was)
 		ctx_swap(0);
@@ -2932,6 +2940,16 @@ static void (*client_frame_original)(void);
 static void client_frame_hook(void)
 {
 	static unsigned frame;
+	{
+		static int seen;
+		static DWORD last;
+		DWORD now = GetTickCount();
+		if (seen < 4 || now - last >= 2000) {
+			log_printf("native: client frame #%d (active %d, ctx %d, ready %d, split %d, cg draws %u) cls %d | sv clients %d %d | hooks: snap %u ps %u step %u ucmd %u smsg %u scmd %u", seen, native_active, ctx_current, ctx1_ready, split_on, cg_draw_count, *(int *)(base + RVA_CLS_STATE), *(int *)(base + RVA_SV_CLIENTS), *(int *)(base + RVA_SV_CLIENTS + SV_CLIENT_STRIDE), hook_counts[0], hook_counts[1], hook_counts[2], hook_counts[3], hook_counts[4], hook_counts[5]);
+			last = now;
+		}
+		seen++;
+	}
 	if (!native_active) {
 		client_frame_original();
 		return;
@@ -3184,6 +3202,7 @@ static void (*server_step_original)(void);
 static void aim_targets_update(void);
 static void server_step_hook(void)
 {
+	hook_counts[2]++;
 	LONGLONG t0 = perf_now();
 	if (ctx_current == 1) {
 		ctx_swap(0);
@@ -3267,6 +3286,7 @@ static void usercmd_step_inner(int lc)
 // These server-side hand-overs can be reached while context 1 is the live one (they run from inside the client frame): they always run with context 0 live.
 static void usercmd_step_hook(int lc)
 {
+	hook_counts[3]++;
 	int was = ctx_current;
 	if (was)
 		ctx_swap(0);
@@ -4284,18 +4304,18 @@ static uint8_t *make_cmd_original(uint8_t *out, int lc)
 	return r;
 }
 
-// the client-side count-of-local-players reads (docs/32bit-native-map/clientctx.md): VA, instruction length, offset of the absolute address
+// The engine checks its own code: seven hash checks (functions 0x4e30f0, 0x4ca740, 0x4f8710, 0x43ffb0 ... run at the renderer init and level loads) over VA 0x401000-0x408000, 0x418000-0x428000 and
+// 0x430000-0x440000 and over 0x6aa000-0x6aa378 (data), and the game quits with exit code 0x8000dead when one differs, so nothing in those ranges can be patched (the 10 client reads of the player count
+// that lie there made the game quit at devmap). The four server reads in them (0x4014e2, 0x4015e9, 0x418d20, 0x418d6b) are left alone. The 64-bit design (the client's reads
+// point at a copy that stays 1) is turned around: the client reads stay on the engine's own count (1) and the other reads (the server, the game module: these 54 sites, docs/32bit-native-map/clientctx.md)
+// point at a variable that holds the session's number of players.
 static const struct {
 	uint32_t va;
 	uint8_t length, disp;
-} client_n_sites32[] = {
-	{0x4818b9, 5, 1}, {0x43a926, 6, 2}, {0x55b7fa, 6, 2}, {0x55ea88, 6, 2}, {0x41685e, 6, 2}, {0x433f9a, 6, 2}, {0x434159, 6, 2}, {0x4341eb, 6, 2},
-	{0x4342b4, 6, 2}, {0x434327, 6, 2}, {0x434378, 6, 2}, {0x56558b, 6, 2}, {0x5656be, 6, 2}, {0x4b74ed, 6, 2}, {0x454cb9, 6, 2}, {0x4b5594, 6, 2},
-	{0x4978b4, 6, 2}, {0x497a44, 6, 2}, {0x497ac4, 6, 2}, {0x48190a, 6, 2}, {0x56e414, 6, 2}, {0x570bf9, 6, 2}, {0x4893d2, 6, 2}, {0x4e7632, 6, 2},
-	{0x4b5062, 6, 2}, {0x471a64, 6, 2}, {0x471ae4, 6, 2}, {0x471b47, 6, 2}, {0x4da584, 6, 2}, {0x428666, 6, 2}, {0x4286ba, 6, 2}, {0x430868, 6, 2},
-	{0x43282c, 6, 2}, {0x432888, 6, 2}, {0x4790ab, 6, 2},
+} server_n_sites32[] = {
+	{0x408889, 6, 2}, {0x40a579, 6, 2}, {0x40c714, 6, 2}, {0x42aed0, 6, 2}, {0x42af2f, 6, 2}, {0x42d116, 6, 2}, {0x42d15a, 6, 2}, {0x46ce9f, 6, 2}, {0x46cecc, 6, 2}, {0x47840d, 6, 2}, {0x482ea4, 6, 2}, {0x49d008, 6, 2}, {0x49d0e3, 6, 2}, {0x49d3e4, 6, 2}, {0x4a9754, 6, 2}, {0x4a97ca, 6, 2}, {0x4ae390, 7, 2}, {0x4ae6b0, 6, 2}, {0x4d3f7c, 6, 2}, {0x4d6774, 6, 2}, {0x4e7c89, 6, 2}, {0x4e8366, 6, 2}, {0x4e83b7, 6, 2}, {0x501e99, 6, 2}, {0x59a476, 6, 2}, {0x59d86e, 6, 2}, {0x59d939, 6, 2}, {0x5c5ca8, 6, 2}, {0x5c6ba4, 6, 2}, {0x5c74e8, 6, 2}, {0x5d7b19, 6, 2}, {0x5e2870, 6, 2}, {0x659f3f, 7, 2}, {0x659fc8, 6, 2}, {0x65a01d, 6, 2}, {0x65a096, 6, 2}, {0x65a0fa, 6, 2}, {0x65a4d7, 6, 2}, {0x65a898, 6, 2}, {0x65ab2e, 6, 2}, {0x65acfd, 5, 1}, {0x65af35, 6, 2}, {0x65b16f, 6, 2}, {0x65b463, 6, 2}, {0x65b48d, 6, 2}, {0x65b7a9, 6, 2}, {0x65c140, 6, 2}, {0x65c167, 6, 2}, {0x65ca9b, 6, 2}, {0x65cb65, 6, 2}
 };
-static int32_t n_client_copy; // what the client code reads instead of the number of local players: the engine's own count, but 1 once a split level has started
+static int32_t n_server_copy; // what the server and the game module read instead of the number of local players: the engine's own count, N once a split level has started
 static int32_t n_zero_copy;       // what the server's entity list reads (a count of 0: no local player is left out)
 static void absolute_patch(uint8_t *site, int disp, const void *to)
 {
@@ -4318,14 +4338,54 @@ static LONG CALLBACK count_veh(EXCEPTION_POINTERS *ep)
 		return EXCEPTION_CONTINUE_SEARCH;
 	c->Dr6 = 0;
 	int32_t v = *(volatile int32_t *)(base + RVA_LOCAL_PLAYERS);
-	log_printf("native: write to the local player count by eip %p (rva 0x%x), value now %d, copy %d", (void *)(uintptr_t)c->Eip, (unsigned)((uintptr_t)c->Eip - (uintptr_t)base), (int)v, (int)n_client_copy);
+	log_printf("native: write to the local player count by eip %p (rva 0x%x), value now %d, copy %d", (void *)(uintptr_t)c->Eip, (unsigned)((uintptr_t)c->Eip - (uintptr_t)base), (int)v, (int)n_server_copy);
 	return EXCEPTION_CONTINUE_EXECUTION;
+}
+// QA ([native] exitwatch=1, 32 bits): who ends the process: the return addresses on the stack when ExitProcess is called
+static void (WINAPI *exit_process_original)(UINT);
+static void WINAPI exit_process_hook(UINT code)
+{
+	uintptr_t *sp = (uintptr_t *)__builtin_frame_address(0);
+	char line[1200];
+	int n = snprintf(line, sizeof(line), "native: ExitProcess(%#x) from:", (unsigned)code);
+	for (int i = 0; i < 300 && n < (int)sizeof(line) - 60; i++) {
+		uintptr_t v;
+		if (IsBadReadPtr(sp + i, 4))
+			break;
+		v = sp[i];
+		MEMORY_BASIC_INFORMATION mbi;
+		if (v > 0x10000 && VirtualQuery((void *)v, &mbi, sizeof(mbi)) && mbi.Type == MEM_IMAGE && (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) {
+			char name[MAX_PATH] = "?";
+			GetModuleFileNameA((HMODULE)mbi.AllocationBase, name, sizeof(name));
+			const char *slash = strrchr(name, 0x5c);
+			n += snprintf(line + n, sizeof(line) - n, " %s+%x", slash ? slash + 1 : name, (unsigned)(v - (uintptr_t)mbi.AllocationBase));
+		}
+	}
+	log_printf("%s", line);
+	exit_process_original(code);
+}
+static void (*die_original)(void);
+static void die_hook(void)
+{
+	uintptr_t *sp = (uintptr_t *)__builtin_frame_address(0);
+	char line[1500];
+	int n = snprintf(line, sizeof(line), "native: the engine's fatal exit (rva 0x103690) called from:");
+	for (int i = 0; i < 400 && n < (int)sizeof(line) - 40; i++) {
+		if (IsBadReadPtr(sp + i, 4))
+			break;
+		uintptr_t v = sp[i];
+		if (v >= (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a0000)
+			n += snprintf(line + n, sizeof(line) - n, " %x", (unsigned)(v - (uintptr_t)base));
+	}
+	log_printf("%s", line);
+	die_original();
 }
 static DWORD WINAPI count_watch(LPVOID unused)
 {
 	(void)unused;
 	AddVectoredExceptionHandler(1, count_veh);
 	for (int round = 0; round < 40; round++) {
+		log_printf("native: count watch: engine %d, copy %d at %p", (int)*(volatile int32_t *)(base + RVA_LOCAL_PLAYERS), (int)*(volatile int32_t *)&n_server_copy, (void *)&n_server_copy);
 		HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
 		THREADENTRY32 te;
 		te.dwSize = sizeof(te);
@@ -4349,29 +4409,40 @@ static DWORD WINAPI count_watch(LPVOID unused)
 			CloseHandle(th);
 		}
 		CloseHandle(snap);
-		Sleep(500);
+		Sleep(100);
 	}
 	return 0;
 }
 static void client_n_install(void)
 {
+	if (cfg("exitwatch", 0)) {
+		uint8_t *fn = (uint8_t *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "ExitProcess");
+		static const uint8_t prolog[5] = {0x55, 0x8b, 0xec, 0x6a, 0xff};
+		if (!hook_function(fn, prolog, sizeof(prolog), (void *)exit_process_hook, (void **)&exit_process_original))
+			log_printf("native: ExitProcess starts with %02x %02x %02x %02x %02x", fn[0], fn[1], fn[2], fn[3], fn[4]);
+	}
+	if (cfg("exitwatch", 0)) {
+		static const uint8_t die_bytes[6] = {0x81, 0xec, 0x00, 0x08, 0x00, 0x00};
+		if (!hook_function(base + 0x103690, die_bytes, sizeof(die_bytes), (void *)die_hook, (void **)&die_original))
+			log_printf("native: the fatal exit function's bytes differ");
+	}
 	if (cfg("countwatch", 0))
 		CreateThread(NULL, 0, count_watch, NULL, 0, NULL);
 	int done = 0;
 	int lo = cfg("n32lo", 0), hi = cfg("n32hi", 999); // QA bisect
-	n_client_copy = *(int32_t *)(base + RVA_LOCAL_PLAYERS); // what the engine has now (see players_apply)
-	for (size_t i = 0; i < sizeof(client_n_sites32) / sizeof(client_n_sites32[0]); i++) {
+	n_server_copy = *(int32_t *)(base + RVA_LOCAL_PLAYERS); // what the engine has now (see players_apply)
+	for (size_t i = 0; i < sizeof(server_n_sites32) / sizeof(server_n_sites32[0]); i++) {
 		if ((int)i < lo || (int)i > hi)
 			continue;
-		uint8_t *site = (uint8_t *)(uintptr_t)client_n_sites32[i].va - 0x400000 + (uintptr_t)base;
+		uint8_t *site = (uint8_t *)(uintptr_t)server_n_sites32[i].va - 0x400000 + (uintptr_t)base;
 		uint32_t at;
-		memcpy(&at, site + client_n_sites32[i].disp, 4);
+		memcpy(&at, site + server_n_sites32[i].disp, 4);
 		if (at != (uint32_t)(uintptr_t)(base + RVA_LOCAL_PLAYERS))
 			continue; // not the instruction the build has
-		absolute_patch(site, client_n_sites32[i].disp, cfg("n32noop", 0) ? (const void *)(base + RVA_LOCAL_PLAYERS) : (const void *)&n_client_copy);
+		absolute_patch(site, server_n_sites32[i].disp, &n_server_copy);
 		done++;
 	}
-	log_printf("native: %d of %d client reads of the local player count point at a copy (%d now)", done, (int)(sizeof(client_n_sites32) / sizeof(client_n_sites32[0])), (int)n_client_copy);
+	log_printf("native: %d of %d server reads of the local player count point at a copy (%d now)", done, (int)(sizeof(server_n_sites32) / sizeof(server_n_sites32[0])), (int)n_server_copy);
 }
 static void list_players_install(void)
 {
@@ -4548,15 +4619,15 @@ static int players_apply(int n)
 	VirtualProtect(at + 6, 1, old, &old);
 #else
 	(void)old;
-	// 32 bits: the count is 0 until the first level starts (the menus run with 0), so the client's copy cannot simply be 1: it starts as what the engine has now and becomes 1 where
-	// G_InitGame stores the count. The store (mov dword [count], 1) becomes a jump to code that stores n there and 1 in the copy.
+	// 32 bits: the engine's own count stays what it is (1: the client code, which cannot be patched, reads it); the store in G_InitGame gets code after it that sets the variable
+	// the server's reads were pointed at (client_n_install) to n. The store itself (mov dword [count], 1) is copied into the code as it is.
 	{
-		uint32_t count_at = (uint32_t)(uintptr_t)(base + RVA_LOCAL_PLAYERS), copy_at = (uint32_t)(uintptr_t)&n_client_copy;
+		uint32_t copy_at = (uint32_t)(uintptr_t)&n_server_copy;
 		uint32_t nn = (uint32_t)n;
-		uint8_t cave[25] = {0xc7, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0xc7, 0x05, 0, 0, 0, 0, 1, 0, 0, 0, 0xe9, 0, 0, 0, 0};
-		memcpy(cave + 2, &count_at, 4);
-		memcpy(cave + 6, &nn, 4);
+		uint8_t cave[25] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc7, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0xe9, 0, 0, 0, 0};
+		memcpy(cave, at, 10);
 		memcpy(cave + 12, &copy_at, 4);
+		memcpy(cave + 16, &nn, 4);
 		uint8_t *stub = hook_code(cave, sizeof(cave));
 		if (!stub) {
 			jgroup = 0;

@@ -154,3 +154,18 @@ for it from 20 s after the start and keeps stacks in `hang-reports/`).
 `MW2COOP_BITS_HOST=64 MW2COOP_BITS_CLIENT=32 sh tools/qa_pair.sh bay "" 35 trainer` (and the other way round): the join, the
 level load, both players in the level, `bay` PASS 5/5 in both directions, one run each, trainer only. The patched `_utility`,
 `_coop` and `_mw2coop` hashes are equal in both builds. Not checked: other maps, set pieces, long sessions.
+
+
+## The engine checks its own code (found 2026-10-29, while porting the native split screen)
+
+The official 32-bit build has seven hash checks of its own image (functions 0x4e30f0, 0x4ca740, 0x4f2af0, 0x4d7340, 0x4d9f50, 0x43ffb0, 0x4f8710; the hash functions are
+0x670560, 0x670740, 0x670920, 0x670b00, 0x670ce0; they run at the renderer init and while a level loads). When a hash differs the engine ends with `ExitProcess(0x8000dead)`
+(the stub at 0x503690) shortly after `devmap`, with no message and no crash line. What they cover (computed from the self-relative range tables in the image):
+
+- code VA 0x400ffc-0x408000, 0x417ffc-0x428000, 0x42fffc-0x440000 (the ranges the mod's patches must stay out of), and data 0x6a9ffc-0x6aa378.
+
+Everything the mod patched so far lies outside them (script loader, party, menus, the call-site hooks of the native split screen). The reads of the local player count that
+the 64-bit design redirects to a copy that stays 1 lie in them (10 client reads at 0x430860-0x43a926) so the 32-bit design is turned around: the client reads keep the engine's own count
+(1), the other 50 reads point at a variable that holds 2 once the level has started (store in G_InitGame at 0x4bf9db: its code goes through a jump to code that does the store and
+sets the variable). Four server reads in the checked ranges (0x4014e2, 0x4015e9, 0x418d20, 0x418d6b) stay as they are. `[native] exitwatch=1` logs who ends the process.
+Tools: `tools/ghidra/ExportFuncs.java` and `tools/match_funcs.py` (function matcher 64 -> 32), docs/32bit-native-map/ (what each 64-bit address is in 32 bits).
