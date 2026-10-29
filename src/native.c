@@ -2349,6 +2349,36 @@ static void body_dobj_sync(void)
 	}
 }
 
+// The snapshot transition (rva 0xb8000) queues a transfer of the server DObj's animation state into the client DObj of each entity (rva 0x29a120(server DObj info, client
+// DObj, time), a queue of 0x28 bytes records processed later in the frame). Both contexts process every snapshot and the client DObjs are shared, so every entity's animation
+// was queued once per context: [native] xfercount=1 logs the calls per second and context, [native] xferskip=1 drops context 1's queueing for every entity but player 1
+// (his client DObj only goes through context 1's snapshots).
+static void (*xfer_original)(void *, void *, unsigned);
+static const uint8_t xfer_bytes[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7c, 0x24, 0x20, 0x41, 0x56, 0x48, 0x83, 0xec, 0x30};
+static void xfer_hook(void *src, void *dest, unsigned t)
+{
+	static LONG calls[2], skipped;
+	static double sum[2];
+	static DWORD at;
+	if ((ctx_current == 0 || ctx_current == 1) && native_active) {
+		InterlockedIncrement(&calls[ctx_current]);
+		float tf;
+		memcpy(&tf, &t, sizeof(tf));
+		sum[ctx_current] += tf;
+		if (CFG_ONCE("xfercount", 0) && GetTickCount() - at >= 1000) {
+			at = GetTickCount();
+			log_printf("native: DObj transfers in the last second: ctx0 %ld (time arg total %.3f) ctx1 %ld (%.3f) (skipped %ld)", calls[0], sum[0], calls[1], sum[1], skipped);
+			calls[0] = calls[1] = 0;
+			sum[0] = sum[1] = 0;
+		}
+		if (ctx_current == 1 && CFG_ONCE("xferskip", 0) && dest != (void *)((const uint8_t *(*)(int))(base + 0x1fece0))(0)) {
+			skipped++;
+			return;
+		}
+	}
+	xfer_original(src, dest, t);
+}
+
 // ---- aim assist for a pad player, the console game's: this PC build left its code out but keeps its data. The cgame fills a list of the targets on the screen
 // each frame (aaGlob[0], rva 0x3cf180, by rva 0x6a570 from the view at 0xbd2c5; one per context: it is in the swapped ranges), and the mouse move (0xcfcf0) computes
 // the regions of the aim_* dvars into it (0x6a350, before its auto melee 0x685c0). On that list, like the console: the turn slows down over a target (aim_slowdown_*),
@@ -3885,6 +3915,8 @@ static void contexts_install(void)
 			log_printf("native: add entity bytes differ");
 		if (!jhook_function(base + 0xb0680, pass2_bytes, sizeof(pass2_bytes), pass2_hook, (void **)&pass2_original))
 			log_printf("native: second entity pass bytes differ");
+		if (!jhook_function(base + 0x29a120, xfer_bytes, sizeof(xfer_bytes), xfer_hook, (void **)&xfer_original))
+			log_printf("native: DObj transfer bytes differ");
 		if (!jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 			log_printf("native: dobj add bytes differ");
 		if (!jhook_function(base + 0xb28b0, own_write_bytes, sizeof(own_write_bytes), own_write_hook, (void **)&own_write_original))
