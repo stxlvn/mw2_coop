@@ -314,6 +314,9 @@ main()
 		case "clock":
 			clock();
 			break;
+		case "speed":
+			speed();
+			break;
 		default:
 			report( "unknown scenario " + GetDvar( "mw2coop_qa" ) );
 	}
@@ -3674,5 +3677,38 @@ clock()
 	{
 		SetDvar( "mw2coop_qa_t", GetTime() );
 		wait 0.05;
+	}
+}
+
+// the nearest ally's real speed: its path length and playback rate once a second, into the dvar mw2coop_qa_s
+// ("<entity number> <units> <playback rate>"), which [native] speedlog=1 sets against what is drawn
+speed()
+{
+	if ( !flag_exist( "introscreen_complete" ) || !flag( "introscreen_complete" ) )
+		level waittill_notify_or_timeout( "introscreen_complete", 30 );
+	wait 3;
+	for ( ;; )
+	{
+		best = undefined;
+		foreach ( ally in GetAIArray( "allies" ) )
+			if ( !isdefined( best ) || DistanceSquared( ally.origin, level.player.origin ) < DistanceSquared( best.origin, level.player.origin ) )
+				best = ally;
+		if ( !isdefined( best ) )
+		{
+			wait 1;
+			continue;
+		}
+		len = 0;
+		last = best.origin;
+		for ( i = 0; i < 20 && isalive( best ); i++ )
+		{
+			wait 0.05;
+			len += Distance( best.origin, last );
+			last = best.origin;
+		}
+		rate = 1;
+		if ( isdefined( best.moveplaybackrate ) )
+			rate = best.moveplaybackrate;
+		SetDvar( "mw2coop_qa_s", best GetEntityNumber() + " " + int( len ) + " " + rate );
 	}
 }

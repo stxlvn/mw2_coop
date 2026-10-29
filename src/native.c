@@ -3445,6 +3445,35 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			}
 		}
 	}
+	if (CFG_ONCE("speedlog", 0) && e && !IsBadReadPtr(e, 12) && (ctx_current == 0 || ctx_current == 1)) { // QA (scenario speed): the drawn path length of the ally the script follows, per context, per second
+		static int ent = -1;
+		static float last[2][3], path[2];
+		static int have[2];
+		static DWORD at;
+		const float *o = (const float *)e;
+		if ((int)(c & 0xffff) == ent) {
+			if (have[ctx_current]) {
+				float dx = o[0] - last[ctx_current][0], dy = o[1] - last[ctx_current][1], dz = o[2] - last[ctx_current][2], dd = sqrtf(dx * dx + dy * dy + dz * dz);
+				if (dd < 100.0f)
+					path[ctx_current] += dd;
+			}
+			memcpy(last[ctx_current], o, sizeof(last[0]));
+			have[ctx_current] = 1;
+		}
+		if (GetTickCount() - at >= 1000) {
+			char v[64] = "";
+			int n = 0, script_len = 0;
+			float rate = 1;
+			if (game_dvar_raw("mw2coop_qa_s", v, sizeof(v)))
+				sscanf(v, "%d %d %f", &n, &script_len, &rate);
+			if (at && ent >= 0)
+				log_printf("native: speed entity %d: drawn path ctx0 %.0f ctx1 %.0f units per second, script %d units per second (playback rate %.2f)", ent, path[0], path[1], script_len * 5 / 5, rate);
+			ent = n;
+			path[0] = path[1] = 0;
+			have[0] = have[1] = 0;
+			at = GetTickCount();
+		}
+	}
 	if (ctx_current == 0 && (c & 0xffff) == 1)
 		p0cnt_flags0 = d;
 	if (CFG_ONCE("p0cnt", 0) >= 2 && ((ctx_current == 0 && (c & 0xffff) == 1) || (ctx_current == 1 && (c & 0xffff) == 0))) {
@@ -3833,6 +3862,8 @@ static void target_list_hook(int lc, void **list, int *count)
 // level.num_entities at rva 0xd96e80.
 static void aim_targets_update(void)
 {
+	if (!CFG_ONCE("aimtargets", 1))
+		return;
 	uint8_t *glob = base + 0x3d0530;
 	int count = *(int *)(base + 0xd96e80);
 	if (count <= 0 || count > 2048)
@@ -3849,8 +3880,16 @@ static void aim_targets_update(void)
 	for (int i = 0; i < count; i++) {
 		uint8_t *ent = base + 0xd9e070 + (size_t)i * 0x2a0;
 		const uint8_t *sentient = *(uint8_t **)(ent + 0x118);
-		if (!ent[0xac] || !ent[0xb0] || ent[0] != 13 || *(int *)(ent + 0x164) <= 0 || !sentient || (unsigned)(*(const int *)(sentient + 8) - 1) >= 3 ||
-		    *(const int *)(sentient + 8) == team) {
+		if (CFG_ONCE("aalog", 0) && ent[0xac] && ent[0xb0] && ent[0] == 13 && sentient && i < 2048) { // QA: the teams of the actors seen, once each
+			static unsigned char logged[8];
+			int tm = *(const int *)(sentient + 8) & 7;
+			if (!logged[tm]) {
+				logged[tm] = 1;
+				log_printf("native: aim targets: an actor of team %d (entity %d), player 1's team %d", tm, i, team);
+			}
+		}
+		// only the player's enemies (the axis team, 1): an ally in the list ran the check on him, and Price was not drawn (owner, Contingency, 2026-10-29)
+		if (!ent[0xac] || !ent[0xb0] || ent[0] != 13 || *(int *)(ent + 0x164) <= 0 || !sentient || *(const int *)(sentient + 8) != 1) {
 			seen[i] = 0;
 			continue;
 		}
