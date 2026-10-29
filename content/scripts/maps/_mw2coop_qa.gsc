@@ -3606,7 +3606,7 @@ armed()
 	p2 = level.player2;
 	p1 thread armed_watch( "player 1" );
 	p2 thread armed_watch( "player 2" );
-	yaw = p1 GetPlayerAngles()[ 1 ];
+	yaw = p1 GetPlayerAngles()[ 1 ] + GetDvarInt( "mw2coop_qa_yawoff" );	// where player 2 stands, seen from player 1 (try another side when something stands between)
 	ahead = p1.origin + AnglesToForward( ( 0, yaw, 0 ) ) * 150;
 	p2 SetOrigin( PlayerPhysicsTrace( ahead + ( 0, 0, 48 ), ahead - ( 0, 0, 96 ) ) );
 	for ( t = 0; t < 160; t++ )
