@@ -111,40 +111,61 @@ static void sample(float x, float y, float *grey, float *alpha)
 		*grey = 0.6f;
 }
 
-// The keyboard and mouse picture for a card whose own picture the game does not have (the 32-bit game's lobby shows an empty box there): a keyboard with its keys and a mouse
-#define KB_W 1.7f
-static float kb_body(float x, float y)
+// The keyboard and mouse picture the game's lobby cards have in the 64-bit build, drawn here the same way (for the 32-bit lobby, whose card has no picture): a keyboard with a row
+// of function keys, three rows of keys and a space bar, and a mouse with its cable and two buttons; black bodies with a white outline, light grey keys, a soft shadow. Laid out in
+// pixels of the 64-bit picture (keyboard x 45-525, y 160-405; mouse x 560-700, y 265-475; the cable above it), the layout's units are those pixels / 655.
+#define KB_W 1.0f
+#define KB_TOP (115.0f / 655.0f)
+#define KB_BOTTOM (475.0f / 655.0f)
+static float kb_body(float px, float py)
 {
-	float d = sd_rrect(x, y, 0.58f, 0.46f, 0.54f, 0.26f, 0.05f);
-	float m = sd_rrect(x, y, 1.42f, 0.46f, 0.13f, 0.22f, 0.12f);
+	float d = sd_rrect(px, py, 285, 282, 240, 123, 16);
+	float m = sd_rrect(px, py, 630, 370, 70, 105, 64);
 	return d < m ? d : m;
 }
 static void sample_kb(float x, float y, float *grey, float *alpha)
 {
-	const float line = 0.024f, edge = 0.016f;
-	float body = kb_body(x, y);
+	float px = x * 655.0f + 45.0f, py = y * 655.0f;
+	const float line = 6.0f, edge = 4.0f;
+	float body = kb_body(px, py);
 	*grey = 0, *alpha = 0;
+	// the cable: a thin light curve from the top of the mouse up
+	float cable_x = 626.0f - 8.0f * sinf((py - 115.0f) / 150.0f * 3.7f);
+	if (py > 115.0f && py < 268.0f && fabsf(px - cable_x) < 2.2f && body >= 0) {
+		*grey = 0.85f, *alpha = 1;
+		return;
+	}
 	if (body >= 0) {
-		if (body < edge || kb_body(x - 0.02f, y - 0.03f) < 0)
-			*alpha = body < edge ? 0.45f : 0.25f;
+		if (body < edge || kb_body(px - 10.0f, py - 14.0f) < 0) // the dark edge and the shadow below and right
+			*alpha = body < edge ? 0.45f : 0.28f;
 		return;
 	}
 	*alpha = 1;
 	if (body > -line) {
-		*grey = 0.93f;
+		*grey = 0.95f; // the outline
 		return;
 	}
 	*grey = 0.1f;
-	if (x < 1.2f) { // the keys: 4 rows of 11 in the keyboard
-		float kx = (x - 0.1f) / 0.9f * 11.0f, ky = (y - 0.27f) / 0.38f * 4.0f;
-		if (kx >= 0 && kx < 11 && ky >= 0 && ky < 4) {
-			float fx = kx - floorf(kx), fy = ky - floorf(ky);
-			if (fx > 0.14f && fx < 0.86f && fy > 0.2f && fy < 0.8f)
-				*grey = 0.75f;
+	if (px < 540.0f) { // the keyboard's keys
+		static const struct {
+			float y, h, x0, w, step;
+			int n;
+		} rows[] = {{190, 12, 70, 30, 38, 11}, {242, 29, 72, 29, 38, 11}, {281, 29, 52, 29, 38, 12}, {321, 29, 72, 29, 38, 11}};
+		for (int r = 0; r < 4; r++) {
+			float fy = fabsf(py - rows[r].y);
+			if (fy < rows[r].h / 2) {
+				float kx = (px - rows[r].x0) / rows[r].step;
+				if (kx >= 0 && kx < rows[r].n && px - rows[r].x0 - floorf(kx) * rows[r].step < rows[r].w) {
+					*grey = 0.8f;
+					return;
+				}
+			}
 		}
-	} else { // the mouse: a line between its buttons and the buttons' split
-		if ((fabsf(y - 0.37f) < 0.012f && fabsf(x - 1.42f) < 0.12f) || (fabsf(x - 1.42f) < 0.012f && y < 0.37f && y > 0.27f))
-			*grey = 0.75f;
+		if (sd_rrect(px, py, 285, 367, 150, 15, 3) < 0) // the space bar
+			*grey = 0.8f;
+	} else { // the mouse: the button split
+		if ((fabsf(px - 630.0f) < 3.0f && py < 340.0f && py > 262.0f) || (fabsf(py - 340.0f) < 3.0f && fabsf(px - 630.0f) < 66.0f))
+			*grey = 0.95f;
 	}
 }
 
@@ -165,7 +186,7 @@ static void *build_material(void *keyboard_material, sample_fn fn, float width, 
 	D3DSURFACE_DESC desc;
 	if (FAILED(IDirect3DTexture9_GetDevice(old, &dev)) || FAILED(IDirect3DTexture9_GetLevelDesc(old, 0, &desc)))
 		return NULL;
-	UINT w = desc.Width < 128 ? 128 : desc.Width, h = desc.Height < 128 ? 128 : desc.Height; // (the 32-bit game's placeholder of the card is 16 x 16: too small for a picture)
+	UINT w = desc.Width < 256 ? 256 : desc.Width, h = desc.Height < 256 ? 256 : desc.Height; // (the 32-bit game's placeholder of the card is 16 x 16: too small for a picture)
 	IDirect3DTexture9 *tex = NULL;
 	HRESULT hr = IDirect3DDevice9_CreateTexture(dev, w, h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, NULL);
 	IDirect3DDevice9_Release(dev);
@@ -224,5 +245,5 @@ void *padicon_material(void *keyboard_material)
 
 void *padicon_keyboard_material(void *template_material)
 {
-	return build_material(template_material, sample_kb, KB_W, 0.2f, 0.72f, "mw2coop_keyboard", &kb_material);
+	return build_material(template_material, sample_kb, KB_W, KB_TOP, KB_BOTTOM, "mw2coop_keyboard", &kb_material);
 }
