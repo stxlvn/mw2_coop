@@ -50,6 +50,7 @@
 #include "game.h"
 #include "log.h"
 #include "progress.h"
+#include "menus.h"
 #include "settings.h"
 
 static char dir[MAX_PATH]; // the mod folder with its trailing slash
@@ -499,6 +500,7 @@ int progress_on_packet(const char *buf, int len)
 	int tl = (int)sizeof(tag) - 1;
 	if (len < tl || memcmp(buf, tag, tl) != 0)
 		return 0;
+	menus_campaign_loading_begin();
 	char text[256];
 	int n = len - tl < (int)sizeof(text) - 1 ? len - tl : (int)sizeof(text) - 1;
 	memcpy(text, buf + tl, n);

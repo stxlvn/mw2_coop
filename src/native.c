@@ -5320,7 +5320,12 @@ int native_split_start2(int dev0, int dev1)
 	menu_pad = dev1;
 	pad_dev[0] = dev0;
 	p1pad = dev1;
-	return activate(2);
+	int ok = activate(2);
+	if (ok && !cfg("waitmsg", 0)) { // both players are on this PC: nothing to wait for, not even on the loading screen (set now: an asset lookup does not go while a level loads)
+		localize_override("COOP_WAITINGFORPLAYER", " ");
+		localize_override("SPECIAL_OPS_WAITING_OTHER_PLAYER", " ");
+	}
+	return ok;
 }
 int native_split_start(int pad)
 {
@@ -5332,6 +5337,8 @@ void native_split_stop(void)
 {
 	if (!native_active)
 		return;
+	localize_override("COOP_WAITINGFORPLAYER", NULL);
+	localize_override("SPECIAL_OPS_WAITING_OTHER_PLAYER", NULL);
 	native_active = 0;
 	mode = 0;
 	ctx_on = 0;

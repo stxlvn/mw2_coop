@@ -339,6 +339,16 @@ static void run_line(char *line)
 		menus_log_names();
 		return;
 	}
+	if (strncmp(line, "!menuinst ", 10) == 0) { // !menuinst <menu> <material>
+		char nm[64], mt[64];
+		if (sscanf(line + 10, "%63s %63s", nm, mt) == 2)
+			menus_log_instances(nm, mt);
+		return;
+	}
+	if (strncmp(line, "!menusearch ", 12) == 0) {
+		menus_find_text(line + 12);
+		return;
+	}
 	if (strncmp(line, "!menuitems ", 11) == 0) {
 		menus_log_items(line + 11);
 		return;

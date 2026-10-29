@@ -83,6 +83,7 @@ typedef struct {
 } MenuEventHandlerSet;
 #endif
 
+static void campaign_loading_begin(void);
 static uint8_t *base;
 #define FN_SLOT_USED(lobby, i) ((char (*)(void *, int))(base + RVA_LOBBY_SLOT_USED))(lobby, i)
 
@@ -154,6 +155,107 @@ void menus_log_names(void)
 }
 
 // QA: logs a menu's items ("!menuitems <menu>"): name, text, rect and its alignment.
+#ifdef _WIN64
+static void log_statement(const char *label, const uint8_t *st)
+{
+	int n = st ? *(const int *)st : 0;
+	const uint8_t *ent = st ? *(uint8_t *const *)(st + 8) : NULL;
+	if (!ent || n <= 0 || n > 64)
+		return;
+	char line[700];
+	int len = snprintf(line, sizeof(line), "menus:     %s exp:", label);
+	for (int t = 0; t < n && len < 640; t++) {
+		const uint8_t *e = ent + 0x18 * t;
+		if (*(const int *)e == 0)
+			len += snprintf(line + len, sizeof(line) - len, " op%d", *(const int *)(e + 8));
+		else {
+			int dt = *(const int *)(e + 8);
+			const char *str = *(const char *const *)(e + 0x10);
+			if (dt == 2 && str && !IsBadStringPtrA(str, 40))
+				len += snprintf(line + len, sizeof(line) - len, " \"%.40s\"", str);
+			else if (dt == 0)
+				len += snprintf(line + len, sizeof(line) - len, " %d", *(const int *)(e + 0x10));
+			else if (dt == 1)
+				len += snprintf(line + len, sizeof(line) - len, " %g", *(const float *)(e + 0x10));
+			else
+				len += snprintf(line + len, sizeof(line) - len, " <%d>", dt);
+		}
+	}
+	{ // the static dvars the expression refers to (operator 24 takes the index of one): their names
+		const uint8_t *sd = *(uint8_t *const *)(st + 0x10);
+		if (sd && !IsBadReadPtr(sd, 0x20)) {
+			int nd = *(const int *)(sd + 0x10);
+			uint8_t *const *list = *(uint8_t *const *const *)(sd + 0x18);
+			for (int t = 0; t + 1 < n && list && nd > 0 && nd < 4096; t++) {
+				const uint8_t *a = ent + 0x18 * t, *b = a + 0x18;
+				if (*(const int *)a == 0 && *(const int *)(a + 8) == 24 && *(const int *)b == 1 && *(const int *)(b + 8) == 0) {
+					int idx = *(const int *)(b + 0x10);
+					const char *dn = idx >= 0 && idx < nd && list[idx] && !IsBadReadPtr(list[idx], 16) ? *(const char *const *)(list[idx] + 8) : NULL;
+					len += snprintf(line + len, sizeof(line) - len, "  [dvar %d = %s]", idx, dn && !IsBadStringPtrA(dn, 40) ? dn : "?");
+				}
+			}
+		}
+	}
+	log_printf("%s", line);
+}
+#endif
+
+// QA: every instance of the menu <name> in the list (zone reloads leave several) with the state of its items that have the material <mat>
+void menus_log_instances(const char *name, const char *mat)
+{
+	uint8_t *ui = base + RVA_UI_CONTEXT;
+	int count = *(int *)(ui + UI_MENU_COUNT);
+	uint8_t **menus = (uint8_t **)(ui + UI_MENUS);
+	for (int m = 0; m < count && m < UI_MAX_MENUS; m++) {
+		const char *n = menus[m] ? *(const char **)menus[m] : NULL;
+		if (!n || lstrcmpiA(n, name))
+			continue;
+		int ic = *(int *)(menus[m] + MENU_ITEM_COUNT);
+		uint8_t **items = *(uint8_t ***)(menus[m] + MENU_ITEMS);
+		log_printf("menus: instance %d of %s at %p: %d items, window flags %x", m, name, (void *)menus[m], ic, *(uint32_t *)(menus[m] + 0x50));
+		for (int i = 0; i < ic; i++) {
+			uint8_t *mt = *(uint8_t **)(items[i] + ITEM_BACKGROUND_PTR);
+			const char *mn = mt && !IsBadReadPtr(mt, 8) ? *(const char **)mt : NULL;
+			if (mn && !IsBadStringPtrA(mn, 40) && !strcmp(mn, mat))
+				log_printf("menus:   [%d] %p flags %x visible exp %p rect %g %g %g %g", i, (void *)items[i], *(uint32_t *)(items[i] + ITEM_DYNAMIC_FLAGS), *(void **)(items[i] + (ITEM_FLOAT_EXPS + sizeof(void *))),
+					   *(float *)(items[i] + ITEM_RECT), *(float *)(items[i] + ITEM_RECT + 4), *(float *)(items[i] + ITEM_RECT + 8), *(float *)(items[i] + ITEM_RECT + 12));
+		}
+	}
+}
+
+static int ci_has(const char *hay, const char *needle)
+{
+	size_t n = strlen(needle);
+	for (; *hay; hay++)
+		if (!_strnicmp(hay, needle, n))
+			return 1;
+	return 0;
+}
+
+// QA: every item of every loaded menu whose text or name contains `needle` (case blind)
+void menus_find_text(const char *needle)
+{
+	uint8_t *ui = base + RVA_UI_CONTEXT;
+	int count = *(int *)(ui + UI_MENU_COUNT);
+	uint8_t **menus = (uint8_t **)(ui + UI_MENUS);
+	for (int m = 0; m < count && m < UI_MAX_MENUS; m++) {
+		if (!menus[m])
+			continue;
+		const char *mn = *(const char **)menus[m];
+		int ic = *(int *)(menus[m] + MENU_ITEM_COUNT);
+		uint8_t **items = *(uint8_t ***)(menus[m] + MENU_ITEMS);
+		for (int i = 0; i < ic; i++) {
+			const char *nm = *(const char **)items[i], *tx = *(const char **)(items[i] + ITEM_TEXT);
+			uint8_t *mat = *(uint8_t **)(items[i] + ITEM_BACKGROUND_PTR);
+			const char *mtn = mat && !IsBadReadPtr(mat, 8) ? *(const char **)mat : NULL;
+			if (mtn && IsBadStringPtrA(mtn, 40))
+				mtn = NULL;
+			if ((nm && ci_has(nm, needle)) || (tx && ci_has(tx, needle)) || (mtn && ci_has(mtn, needle)))
+				log_printf("menus: found in %s[%d]: name '%s' text '%s' material '%s'", mn ? mn : "?", i, nm ? nm : "-", tx ? tx : "-", mtn ? mtn : "-");
+		}
+	}
+}
+
 void menus_log_items(const char *menu_name)
 {
 	uint8_t *menu = ui_find_menu(menu_name);
@@ -189,6 +291,27 @@ void menus_log_items(const char *menu_name)
 		if (fexp || *(void **)(it + ITEM_DISABLED_EXP) || script)
 			log_printf("menus:   floatExps %p disabledExp %p flags %x action %.200s", fexp,
 				   *(void **)(it + ITEM_DISABLED_EXP), *(uint32_t *)(it + ITEM_DYNAMIC_FLAGS), script ? script : "-");
+#ifdef _WIN64
+		{ // QA: the item's type and its background material
+			uint8_t *mat = *(uint8_t **)(it + ITEM_BACKGROUND_PTR);
+			const char *mn = mat && !IsBadReadPtr(mat, 8) ? *(const char **)mat : NULL;
+			log_printf("menus:     type %d data %d material %s", *(int *)(it + ITEM_TYPE), *(int *)(it + ITEM_DATA_TYPE), mn && !IsBadStringPtrA(mn, 40) ? mn : "-");
+			{
+				const char *dv = *(const char **)(it + ITEM_DVAR);
+				log_printf("menus:     dvar '%s'", dv && !IsBadStringPtrA(dv, 60) ? dv : "-");
+				log_statement("text", *(uint8_t **)(it + ITEM_TEXT_EXP));
+				log_statement("material", *(uint8_t **)(it + ITEM_MATERIAL_EXP_PTR));
+			}
+		}
+#endif
+#ifdef _WIN64
+		{ // QA: the expressions of the item (the tokens: operand kind/value or operator code), to find what shows or hides it
+			int fcount = *(int *)(it + ITEM_FLOAT_EXPS - 8);
+			log_statement("visible", *(uint8_t **)(it + ITEM_FLOAT_EXPS + 8));
+			for (int k = 0; fexp && k < fcount && k < 12; k++)
+				log_statement("float", *(uint8_t **)((uint8_t *)fexp + 16 * k + 8));
+		}
+#endif
 	}
 }
 
@@ -1304,6 +1427,7 @@ static void native_launch(void)
 	InterlockedExchange(&split_mode, 0);
 	((void (*)(void))(base + RVA_PARTY_RESET))();
 	char cmd[160];
+	campaign_loading_begin();
 	snprintf(cmd, sizeof(cmd), "stopListening\nset mw2coop_split_view 0\nmap %s\n", map);
 	game_cbuf_addtext(cmd);
 	InterlockedExchange(&native_started, (LONG)GetTickCount() | 1);
@@ -1378,8 +1502,10 @@ static void start_launch(void)
 	progress_begin(continuing, partner_id, partner_xuid, (const char *)base + RVA_PARTY_MEMBER_NAMES + 0x38, // slot 1
 		       add_member);
 	log_printf("menus: Start: coopLaunch");
-	if (!splitscreen_before_launch())
+	if (!splitscreen_before_launch()) {
+		campaign_loading_begin();
 		game_cbuf_addtext("coopLaunch\n");
+	}
 }
 
 // The popups' questions with the names in them, in the game's language.
@@ -1779,6 +1905,72 @@ static cmd_function_t commands[] = {
 static volatile LONG tick_queued;
 static volatile DWORD tick_queued_at;
 
+// The loading screen. The Spec Ops lobby sets the dvar "specialops" to 1, and the loading screen follows it: with 1 it is Spec Ops' (another version of the mission's film with a
+// black panel and the studio logo, the bar under the level's text, "waiting for the other player"), with 0 the campaign's (the film over the whole picture, the bar at the bottom in the
+// middle, nothing to wait for). Our campaign co-op and split screen use that lobby, so they would load with Spec Ops' screen: the dvar is 0 from the launch to the end of the level
+// (checked: a split screen mission plays the same with 0), and Spec Ops itself is untouched (its lobby sets it again). The scripts do not look at it for the co-op: is_specialop() is
+// patched (content/patches/maps/_utility.gsc.patch).
+static int specialops_saved = -1;
+static volatile LONG campaign_session; // set by menus_poll while a campaign co-op or split screen game is being set up or played
+
+// the dvar is a bool in this build (only its first byte is the value); an int would be read the same way through game_dvar_raw
+static int specialops_read(dvar_t *d)
+{
+	char v[16] = "";
+	game_dvar_raw("specialops", v, sizeof(v));
+	(void)d;
+	return v[0] && v[0] != '0';
+}
+
+static void specialops_write(int v)
+{
+	dvar_t *d = game_find_dvar("specialops");
+	if (!d)
+		return;
+	if (d->type == 0)
+		*(uint8_t *)&d->current = (uint8_t)v;
+	else
+		d->current.integer = v;
+}
+
+// at the launch (the host's Start, a client's launch from the party, the split screen): called by the code that launches, and by the thread below for the launch that is the engine's
+static void campaign_loading_begin(void)
+{
+	dvar_t *d = game_find_dvar("specialops");
+	if (!d || !specialops_read(d))
+		return;
+	if (specialops_saved < 0)
+		specialops_saved = 1;
+	specialops_write(0);
+	log_printf("menus: loading screen: the campaign's (specialops 1 -> 0)");
+}
+
+void menus_campaign_loading_begin(void) // progress.c: the host's start packet has come (the client)
+{
+	campaign_loading_begin();
+}
+
+static void campaign_loading_end(void)
+{
+	if (specialops_saved < 0)
+		return;
+	specialops_write(specialops_saved);
+	log_printf("menus: loading screen: specialops back to %d", specialops_saved);
+	specialops_saved = -1;
+}
+
+// The engine's own launch of a client (the party frame: the coop slot state goes to 3, then "map"): this thread sees it within a few milliseconds
+static DWORD WINAPI loading_thread(LPVOID unused)
+{
+	(void)unused;
+	for (;;) {
+		Sleep(15);
+		if (base && campaign_session && *(volatile int32_t *)(base + RVA_COOP_SLOT_STATE) == 3)
+			campaign_loading_begin();
+	}
+	return 0;
+}
+
 void menus_poll(void)
 {
 	if (!base)
@@ -1787,7 +1979,31 @@ void menus_poll(void)
 	game_dvar_raw("sv_running", v, sizeof(v));
 	game_dvar_raw("coop", coop, sizeof(coop));
 	// hosting: the host's party is up (lobby), or a co-op level runs on the host
+#ifdef _WIN64
+	{ // QA: the UI state of local client 0 (1 main menu, 2 paused, 3 pregame, 6 briefing = the loading screen, 7 victory) and the client state: when does the briefing end?
+		static int last_ui = -99, last_cls = -99;
+		int ui = *(volatile int *)(base + 0x1a49dc4), cls = *(volatile int *)(base + 0x533cb8);
+		if (ui != last_ui || cls != last_cls) {
+			log_printf("menus: ui state %d, client state %d", ui, cls);
+			last_ui = ui, last_cls = cls;
+		}
+	}
+#endif
 	upnp_want(base[RVA_PARTY_IS_HOST] && (base[RVA_PARTY_ACTIVE] || (v[0] == '1' && coop[0] == '1')));
+	{ // the loading screen's look: the campaign's while a campaign co-op or split screen game is being set up or played (Spec Ops' lobby and levels keep theirs)
+		static int sticky, was_running;
+		char mapn[64] = "";
+		game_dvar_raw("coop_mapName", mapn, sizeof(mapn));
+		int campaign = base[RVA_PARTY_ACTIVE] && mapn[0] && strncmp(mapn, "so_", 3) != 0;
+		if (campaign || native_split_active())
+			sticky = 1;
+		else if (base[RVA_PARTY_ACTIVE] || (was_running && v[0] != '1'))
+			sticky = 0; // a Spec Ops lobby, or the level is over
+		was_running = v[0] == '1';
+		InterlockedExchange(&campaign_session, sticky);
+		if (!sticky)
+			campaign_loading_end();
+	}
 	if (v[0] == '1')
 		return;
 	// the queue is cleared by a map load; a tick queued before it never runs
@@ -1905,6 +2121,7 @@ void menus_install(void)
 		log_printf("menus: coopPlayerInfo not hooked (bytes differ)");
 #endif
 	CreateThread(NULL, 0, lobby_pad_thread, NULL, 0, NULL);
+	CreateThread(NULL, 0, loading_thread, NULL, 0, NULL);
 	// devmap is a server command: the console node's function is empty and the command goes on
 	// to this node (Cmd_AddServerCommand in SV_AddOperatorCommands, rva 0x22bef0)
 	cmd_function_t *sv_devmap = (cmd_function_t *)(base + RVA_SV_CMD_DEVMAP);

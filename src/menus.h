@@ -17,6 +17,10 @@ int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint
 void menus_log_action(const char *menu_name, const char *item_name);
 // QA: logs a menu's items with their rects
 void menus_log_items(const char *menu_name);
+void menus_find_text(const char *needle);
+// progress.c: the host's start packet came: the loading screen is the campaign's (specialops 0 until the level is over)
+void menus_campaign_loading_begin(void);
+void menus_log_instances(const char *name, const char *mat);
 void menus_log_names(void);
 // instance.c: the second player of a split screen lobby pressed a button or Ready (the lobby texts follow)
 void menus_split_changed(void);
