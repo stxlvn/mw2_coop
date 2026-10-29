@@ -56,13 +56,37 @@ static IDirect3D9 *WINAPI create9_hook(UINT version)
 	return d3d;
 }
 
+static void hook_create9(HMODULE d3d9);
+
+// A client that maps the game itself (iw4x-sp) loads d3d9.dll after our DllMain: watch for it, a millisecond at a time, until the game has its device
+static DWORD WINAPI wait_for_d3d9(LPVOID unused)
+{
+	(void)unused;
+	for (int i = 0; i < 120000 && !create9_orig; i++) {
+		HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
+		if (d3d9) {
+			hook_create9(d3d9);
+			return 0;
+		}
+		Sleep(1);
+	}
+	log_printf("d3dcap: d3d9.dll never loaded");
+	return 0;
+}
+
 void d3dcap_install(void)
 {
 	HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
 	if (!d3d9) {
-		log_printf("d3dcap: d3d9.dll is not loaded yet");
+		log_printf("d3dcap: d3d9.dll is not loaded yet, waiting for it");
+		CloseHandle(CreateThread(NULL, 0, wait_for_d3d9, NULL, 0, NULL));
 		return;
 	}
+	hook_create9(d3d9);
+}
+
+static void hook_create9(HMODULE d3d9)
+{
 	uint8_t *fn = (uint8_t *)GetProcAddress(d3d9, "Direct3DCreate9");
 	if (!fn) {
 		log_printf("d3dcap: no Direct3DCreate9 in d3d9.dll");
