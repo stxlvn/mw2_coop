@@ -4276,6 +4276,21 @@ static const char *name_get_hook(int client)
 // Player 1's entity data for context 1's slot 0: origin and angles of the pose (+0x18..0x30) and the entity states (+0x60..0x170, and +0x178 on) from context 0,
 // while the slot keeps its own pose bookkeeping (local client number, lighting and ragdoll handles: +0..0x18, +0x30..0x60) and its own animation tree pointer
 // (+0x170): a whole copy took context 0's "mine" bookkeeping along and the body was drawn as a stretched mesh ([native] p0full=1 copies everything as before).
+// The tail of a centity (from the valid flag on: interpolate, currentValid, the previous event sequence, miscTime, the lighting origin) is the cgame's bookkeeping between frames. The
+// copy of player 1's entity is put into context 1's slot 0 for the draw and the slot is put back afterwards, so what the draw wrote there (the events it has handled) was lost and the
+// next frame played the last event again, for ever: the muzzle flash of a player who had fired stayed on his gun in the other half. The tail the draw left is kept and used by the
+// next copy ([native] p0tail=0 off).
+#define P0_TAIL CENT_VALID
+#define P0_TAIL_LEN (CENT_SIZE - CENT_VALID)
+static uint8_t p0_tail[P0_TAIL_LEN];
+static int p0_tail_ok;
+static void p0_tail_take(const uint8_t *slot)
+{
+	if (CFG_ONCE("p0tail", 1)) {
+		memcpy(p0_tail, slot + P0_TAIL, P0_TAIL_LEN);
+		p0_tail_ok = 1;
+	}
+}
 static void p0_put(uint8_t *slot)
 {
 	// [native] p0keep: bit 0 keeps the slot's own +0..0x18 (pose header), bit 1 its +0x30..0x60 (rest of the pose), bit 2 its +0x170..0x178 (animation tree
@@ -4286,6 +4301,8 @@ static void p0_put(uint8_t *slot)
 	uint8_t saved[CENT_SIZE];
 	memcpy(saved, slot, sizeof(saved));
 	memcpy(slot, p0_ent, sizeof(p0_ent));
+	if (p0_tail_ok && CFG_ONCE("p0tail", 1))
+		memcpy(slot + P0_TAIL, p0_tail, P0_TAIL_LEN);
 	if (keep & 1)
 		memcpy(slot, saved, P0_HDR);
 	if (keep & 2)
@@ -4354,6 +4371,7 @@ static void pass2_hook(unsigned lc)
 		memcpy(saved, base + RVA_CENT, sizeof(saved));
 		p0_put(base + RVA_CENT);
 		pass2_original(lc);
+		p0_tail_take(base + RVA_CENT);
 		memcpy(base + RVA_CENT, saved, sizeof(saved));
 		return;
 	}
@@ -4760,6 +4778,7 @@ static void add_entity_hook(int n)
 			add_entity_original(n);
 			lag_unfix_yaw(n, sv, ap);
 			if (p0copy)
+				p0_tail_take(base + RVA_CENT);
 				memcpy(base + RVA_CENT, slot1_saved, sizeof(slot1_saved));
 		}
 		*flags = saved;
@@ -4838,6 +4857,40 @@ static void ent_clean_hook(void)
 		}
 		return;
 	}
+#ifdef _WIN64
+	// The cleanup also carries the effects attached to an entity over to its new DObj (a weapon change makes a new one) or kills them: rva 0x115110 saves the old DObj's models and tags
+	// before the old one is freed, rva 0x1151d0 re-attaches (or kills) afterwards, in the live effects system, which is context 0's. Context 1 has a system of its own (fxsplit) that
+	// never got this: the muzzle flash of a body whose weapon was changed stayed on it for ever in the other half. The same two calls are made for context 1's system.
+	if (native_active && ctx1_ready && ctx_store[1][NRANGES - 1] && CFG_ONCE("fxsplit", 1) && CFG_ONCE("fxentfix", 1)) {
+		struct {
+			uint8_t buf[528];
+			int ent, flag;
+			unsigned short key;
+		} saved[64];
+		int count = 0;
+		const uint32_t *flags = (const uint32_t *)(base + RVA_ENT_FLAGS);
+		const uint8_t *(*client_dobj)(int) = (const uint8_t *(*)(int))(base + RVA_CLIENT_DOBJ);
+		for (int w = 0; w < 64 && count < 64; w++)
+			for (int bit = 0; bit < 32 && count < 64; bit++)
+				if (flags[w] & (0x80000000u >> bit)) {
+					int n = w * 32 + bit;
+					const uint8_t *slot = base + RVA_CENT + (size_t)n * CENT_SIZE;
+					saved[count].ent = n;
+					saved[count].flag = *(const int *)(slot + 0x16c) == 0xffffff;
+					saved[count].key = *(const unsigned short *)(slot + 0x164);
+					((void (*)(void *, const uint8_t *, uint8_t, uint16_t))(base + 0x115110))(saved[count].buf, client_dobj(n), (uint8_t)saved[count].flag, saved[count].key);
+					count++;
+				}
+		ent_clean_original();
+		if (count) {
+			ctx_swap(1);
+			for (int i = 0; i < count; i++)
+				((void (*)(void *, int, int, const uint8_t *, char, short))(base + 0x1151d0))(saved[i].buf, 0, saved[i].ent, client_dobj(saved[i].ent), (char)saved[i].flag, (short)saved[i].key);
+			ctx_swap(0);
+		}
+		return;
+	}
+#endif
 	ent_clean_original();
 }
 
