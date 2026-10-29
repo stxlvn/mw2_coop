@@ -92,9 +92,8 @@ X reload (hold: use), Y next weapon, LB / RB grenades, LS sprint, RS melee, Back
 action slots. Aim assist and vibration work as on the console, and hints show the gamepad's buttons instead of keys.
 Per player options (look sensitivity, inverted look, aim assist, swapped sticks, tactical layout, vibration): Options ->
 Controls -> Gamepad: Alpha / Gamepad: Bravo in the main menu. The second player cannot work the menus, only pause.
-Known issues: the gamepad part is tested with simulated gamepads only; a player who changes weapon keeps the first one in
-his hands in the other player's half; one sound listener; the game may not close by itself after quitting (end it in
-Task Manager); 64-bit build only. If something is wrong, attach mw2coop\mw2coop.log.
+Known issues: the gamepad part is tested with simulated gamepads only; one sound listener; the game may not close by itself
+after quitting (end it in Task Manager); 64-bit build only. If something is wrong, attach mw2coop\mw2coop.log.
 
 Not affiliated with or endorsed by Activision or Infinity Ward. mw2coop's own code is MIT
 licensed (LICENSE.txt). No game files are included.

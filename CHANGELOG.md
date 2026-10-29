@@ -23,9 +23,9 @@ pause. Gamepad extras, as on the console: aim assist (turn slows over a target, 
 snap), vibration, and the pad's buttons instead of key names in hints. Options -> Controls has pages "Gamepad: Alpha" and
 "Gamepad: Bravo" (look sensitivity, inverted look, aim assist, swapped sticks, tactical layout, vibration). Red dot sights work
 in both halves, and effects, glass and particles drawn with the 2D no longer veil the top half.
-Known gaps: the gamepad part is tested with simulated gamepads only; a player who changes weapon keeps the first one in his
-hands in the other player's half; one sound listener, no second keyboard (the keyboard goes to one player), the 32-bit build
-has the two-process split screen only.
+A player's body in the other half now shows the weapon he holds, and changes it when he does.
+Known gaps: the gamepad part is tested with simulated gamepads only; one sound listener, no second keyboard (the keyboard goes
+to one player), the 32-bit build has the two-process split screen only.
 
 ## Unreleased (since v0.4.7-beta)
 
