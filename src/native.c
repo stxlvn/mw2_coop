@@ -1882,7 +1882,10 @@ static const range_t ranges[] = {
     {0x494424, 8},                   // the snapshot message's time and flag
     {0x33ba90, 0xe80},               // aim assist of local client 0 (aaGlob)
     {0x45e8a4, 0x2c},                // the cgame's view model pointers (2 hands x 0x14)
+    {0x983e80, 0xa90c80 - 0x983e80}, // the effects system of local client 0 (FX_InitSystem VA 0x49e390: header VA 0xd83e80 (0xad0), the block 0xd84980 (0x4810), the pools from
+                                     // 0xd89200 (0x107a80 bytes)): see the 64-bit range; [native] fxsplit=0 turns it off
 };
+#define RANGE_FX 10
 #endif
 #define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
 static uint8_t *ctx_store[2][NRANGES];
