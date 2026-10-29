@@ -240,6 +240,9 @@ static void patch_controls(void)
 
 void padopts_tick(void)
 {
+#ifdef MW2COOP_IW4X // the addresses above are the official build's: no gamepad pages in the iw4x-sp profile
+	return;
+#endif
 	register_dvars();
 	unlock_aim_dvars();
 	add_page(0);

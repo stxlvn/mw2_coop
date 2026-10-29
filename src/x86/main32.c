@@ -241,8 +241,10 @@ static DWORD WINAPI identify(LPVOID unused)
 			shot_install();
 			fov_install();
 			splitscreen_install();
+#ifndef MW2COOP_IW4X // their addresses are the official 32-bit build's: the iw4x-sp profile (1.0.159) has none of them mapped yet
 			native_install();
 			rumble_install();
+#endif
 			instance_install();
 			control_start();
 			return 0;
