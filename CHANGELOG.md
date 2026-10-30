@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.5.6-beta (2026-10-30, pre-release: extra fixes of v0.5.5-beta)
+
+Fixes of the split screen found after v0.5.5-beta; nothing else changes. Same state as 0.5.5: tested with bots and
+simulated gamepads, not yet by two people on real gamepads.
+
+- **Split screen HUD as on the console**: ammo and grenades, the compass and stance, the use and mantle hints and the
+  low ammo warning sit where the Xbox 360 split screen puts them, in both halves.
+- **Scope**: player 1's scope no longer blacks out the bottom half.
+- **Sound**: each player now has his own sound listener, so the hearing no longer jumps between the two every frame.
+- **Muzzle flash**: a player who fired no longer has an endless flash on his gun in the other half; it shows once
+  per shot.
+- **Shadows**: each half keeps its own view for the shadows, so the shadow of the camo net over the trainer's grenade
+  box no longer follows where the other player looks.
+- **Smoother picture**: the picture is shown once per pair of views instead of once per view (with vsync the game
+  showed half as many frames per half as it drew), and the QA frames are not written for players.
+- **32-bit game**: the split screen no longer crashes at its start (a missing brace after the muzzle flash change of
+  the same night; the 64-bit game survived it by luck).
+- Checkpoint restarts and the host's actions work in a split session; the test tools got a scenario for the grenade
+  box and a check that stops a harness left over from an earlier run.
+
 ## v0.5.5-beta (2026-10-29, pre-release of 0.6.0)
 
 A pre-release for people who want to try the split screen and tell us what breaks; the final 0.6.0 follows after more
