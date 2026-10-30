@@ -2061,6 +2061,11 @@ static const range_t ranges[] = {
 static uint8_t *ctx_store[2][NRANGES];
 static int ctx_current;
 
+#ifdef _WIN64
+// Diagnostics ([native] xswap=<mask>): renderer statics swapped with the contexts too (bit 0: shadow light ring and parameters, 1: the scene frontend globals, 2: the sun shadow cache per view)
+static const struct { unsigned rva, size; } xranges[] = {{0x40d2580, 0x480}, {0x4113400, 0x400}, {0x4359180, 0x200}};
+static uint8_t *x_store[2][3];
+#endif
 static void ctx_ensure(void)
 {
 	if (ctx_store[0][0])
@@ -2070,6 +2075,14 @@ static void ctx_ensure(void)
 		ctx_store[1][i] = VirtualAlloc(NULL, ranges[i].size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 		memcpy(ctx_store[1][i], base + RANGE_RVA(i), ranges[i].size);
 	}
+#ifdef _WIN64
+	for (int i = 0; i < 3; i++)
+		if (cfg("xswap", 0) & (1 << i)) {
+			x_store[0][i] = VirtualAlloc(NULL, xranges[i].size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+			x_store[1][i] = VirtualAlloc(NULL, xranges[i].size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+			memcpy(x_store[1][i], base + xranges[i].rva, xranges[i].size);
+		}
+#endif
 }
 
 // `mask`: the ranges (bit i = ranges[i]) that are swapped; a function that touches only the cl block need not expose the other threads to a swapped cgame block. A masked swap
@@ -2116,6 +2129,14 @@ static void ctx_swap_mask(int to, unsigned mask)
 		memcpy(ctx_store[ctx_current][i], live, ranges[i].size);
 		memcpy(live, ctx_store[to][i], ranges[i].size);
 	}
+#ifdef _WIN64
+	if (mask == CTX_ALL)
+		for (int i = 0; i < 3; i++)
+			if (x_store[0][i]) {
+				memcpy(x_store[ctx_current][i], base + xranges[i].rva, xranges[i].size);
+				memcpy(base + xranges[i].rva, x_store[to][i], xranges[i].size);
+			}
+#endif
 	perf_copy += perf_now() - t0;
 	InterlockedIncrement(&perf_swaps);
 	ctx_current = to;
@@ -3636,7 +3657,7 @@ static void client_frame_hook(void)
 	if (nogun < 0)
 		nogun = cfg("nogun", 0);
 	uint8_t *gun_dvar = *(uint8_t **)(base + RVA_DRAWGUN_DVAR); // cg_drawGun
-	if (mode >= 5 && ctx1_ready && split_on && (frame++ & 1)) {
+	if (mode >= 5 && ctx1_ready && split_on && (((frame++) / (unsigned)(CFG_ONCE("viewrun", 1) < 1 ? 1 : CFG_ONCE("viewrun", 1))) & 1)) { // [native] viewrun=<n>: each view is drawn n engine frames in a row (diagnostics: does the renderer reuse the last frame's data?)
 		frame_bottom = 1;
 		if (nogun && gun_dvar)
 			*(int *)(gun_dvar + 0x10) = 0; // test: context 1 without the view model

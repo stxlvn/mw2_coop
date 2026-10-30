@@ -83,6 +83,9 @@ main()
 		case "firecheck":
 			firecheck();
 			break;
+		case "shadowcheck":
+			shadowcheck();
+			break;
 		case "frags":
 			frags();
 			break;
@@ -3274,6 +3277,29 @@ firecheck()
 			SetDvar( "mw2coop_qa_frame", "fc-" + player_name( player ) + "-" + i );
 		}
 		wait 2;
+	}
+	report( "done" );
+}
+
+// Native split screen: player 2 keeps his view, player 1 turns around in steps; the composed frames: do the shadows in player 2's half depend on where player 1 looks?
+shadowcheck()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	flag_wait( "frags_have_been_spawned" );
+	wait 4;
+	box = GetEnt( "grenade_box", "targetname" );
+	// player 2 looks straight at the table with the grenade box (the camouflage net over it is in view); player 1 beside him turns in 90 degree steps and stands still for each frame
+	level.player2 FreezeControls( true );
+	to = VectorToAngles( ( box.origin[ 0 ], box.origin[ 1 ], level.player2 GetEye()[ 2 ] ) - level.player2 GetEye() );
+	base = to[ 1 ];
+	for ( i = 0; i < 5; i++ )
+	{
+		level.player2 SetPlayerAngles( ( 0, base, 0 ) );
+		level.player SetPlayerAngles( ( 0, base + i * 90, 0 ) );
+		wait 3;
+		report( "shadowcheck: step " + i + ", player 1 yaw " + level.player GetPlayerAngles()[ 1 ] + ", player 2 yaw " + level.player2 GetPlayerAngles()[ 1 ] );
+		SetDvar( "mw2coop_qa_frame", "sh-" + i );
+		wait 1.5;
 	}
 	report( "done" );
 }
