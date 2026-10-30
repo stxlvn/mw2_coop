@@ -80,6 +80,9 @@ main()
 	maps\_mw2coop::state( "qa running" );	// let start points, regroup and weapon sync run
 	switch ( GetDvar( "mw2coop_qa" ) )
 	{
+		case "firecheck":
+			firecheck();
+			break;
 		case "frags":
 			frags();
 			break;
@@ -3210,7 +3213,69 @@ frags()
 		wait 2.5;
 		after = player GetWeaponAmmoStock( "fraggrenade" );
 		check( after > before, "frags: " + player_name( player ) + " picked up grenades (" + before + " -> " + after + ")" );
+		SetDvar( "mw2coop_qa_frame", "frags-" + player_name( player ) );
+		wait 1.5;
 	}
+	// then the players face each other and fire in front of the cameras: the muzzle flash must be only at the gun that fires
+	foreach ( player in level.players )
+	{
+		player GiveWeapon( "m4_grunt" );
+		player GiveMaxAmmo( "m4_grunt" );
+		player SwitchToWeapon( "m4_grunt" );
+	}
+	fwd = AnglesToForward( ( 0, level.player GetPlayerAngles()[ 1 ], 0 ) );
+	level.player2 SetOrigin( level.player.origin + fwd * 90 );
+	wait 1;
+	level.player SetPlayerAngles( VectorToAngles( ( level.player2.origin + ( 0, 0, 48 ) ) - level.player GetEye() ) );
+	level.player2 SetPlayerAngles( VectorToAngles( ( level.player.origin + ( 0, 0, 48 ) ) - level.player2 GetEye() ) );
+	wait 2;
+	foreach ( player in level.players )
+	{
+		report( "frags: " + player_name( player ) + " fires" );
+		press( player, "attack", 5000 );
+		wait 1.5;
+		SetDvar( "mw2coop_qa_frame", "fire-" + player_name( player ) + "-a" );
+		wait 2;
+		SetDvar( "mw2coop_qa_frame", "fire-" + player_name( player ) + "-b" );
+		wait 3;
+		SetDvar( "mw2coop_qa_frame", "fire-" + player_name( player ) + "-after" );
+		wait 1;
+	}
+	report( "done" );
+}
+
+// Native split screen: one player fires at the other, who looks at him; the composed frames (both halves) every 0.4 s: the shooter's muzzle flash must show in the other half too
+firecheck()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	wait_intro();
+	wait 6;
+	foreach ( player in level.players )
+	{
+		player EnableWeapons();
+		player FreezeControls( false );
+		player GiveWeapon( "m4_grunt" );
+		player GiveMaxAmmo( "m4_grunt" );
+		player SwitchToWeapon( "m4_grunt" );
+	}
+	fwd = AnglesToForward( ( 0, level.player GetPlayerAngles()[ 1 ], 0 ) );
+	level.player2 SetOrigin( level.player.origin + fwd * 160 );
+	wait 1;
+	level.player SetPlayerAngles( VectorToAngles( ( level.player2.origin + ( 0, 0, 48 ) ) - level.player GetEye() ) );
+	level.player2 SetPlayerAngles( VectorToAngles( ( level.player.origin + ( 0, 0, 48 ) ) - level.player2 GetEye() ) );
+	wait 2;
+	foreach ( player in level.players )
+	{
+		report( "firecheck: " + player_name( player ) + " fires, " + player GetCurrentWeapon() );
+		press( player, "attack", 4000 );
+		for ( i = 0; i < 8; i++ )
+		{
+			wait 0.4;
+			SetDvar( "mw2coop_qa_frame", "fc-" + player_name( player ) + "-" + i );
+		}
+		wait 2;
+	}
+	report( "done" );
 }
 
 wait_intro()

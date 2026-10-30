@@ -99,7 +99,7 @@ static uint8_t *base;
 #define P0_HDR 0x18 // the pose header a copy of the other player's entity keeps
 #define P0_REST 0x30 // the rest of the pose
 #define P0_REST_LEN 0x30
-#define P0_TREE 0x170 // the two dwords with the animation tree reference
+#define P0_TREE 0x170 // the event sequence and the event bytes (cgame check events, rva 0x9f840: +0x170 sequence, +0x174 events, +0x194 previous sequence); once taken for an animation tree reference
 #define SLOT_END_PAST(q) ((q) > base + 0x545857)
 #define RVA_AIM_GLOB 0x3cf180 // aaGlob
 #define RVA_AIM_TARGET_GLOB 0x3d0530
@@ -4323,7 +4323,7 @@ static void p0_put(uint8_t *slot)
 	// pointer); bit 3 clears the per-client hide bits (0x30) of the copied eFlags (+0xec): context 0's own entity has them, the second pass needs them clear.
 	static int keep = -1;
 	if (keep < 0)
-		keep = cfg("p0keep", 8 | 4 | 1);
+		keep = cfg("p0keep", 8 | 1);
 	uint8_t saved[CENT_SIZE];
 	memcpy(saved, slot, sizeof(saved));
 	memcpy(slot, p0_ent, sizeof(p0_ent));
