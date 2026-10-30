@@ -2035,8 +2035,14 @@ static const range_t ranges[] = {
     {0x3cf180, 0xe80},               // aim assist of local client 0 (aaGlob: the targets on screen, the aim_* regions): each context's cgame fills its own
     {0xbc7300, 0xcdb110 - 0xbc7300}, // the effects system of local client 0 (FX_InitSystem 0x119a00: header 0xb18, its pools from 0xbc7e80, 0x10ea80 bytes, then 0xcd6900 + 0x4810):
                                      // with one system both halves drew the muzzle flash and smoke of the first-person weapon of the other ([native] fxsplit=0 off)
+    {0x4812878, 0xdb0},              // the renderer's view of each local client (0x2b8 each: frustum planes, the sides of the view; R_RenderScene rva 0x5160 reads it at
+                                     // 0x4812878 + local client * 0x2b8) and the camera's visible cell bits after them (0x4813548 pointer, 0x4813550 bits, cleared and filled by the
+                                     // portal walk rva 0x19760 each frame). The sun shadow set-up comes before the walk and culls its casters with the LAST frame's cells: the other
+                                     // view's, so a half's static sun shadows came and went with where the other player looked (the camo net over the trainer's grenade box).
+                                     // [native] viewsplit=0 off
 };
 #define RANGE_FX 9
+#define RANGE_VIEW 10
 #else
 // 32 bits (docs/32bit-native-map/clientctx.md): the same eight kinds of state in the same order (the code indexes them), the cgame block in two parts: [0] is its main part
 // (the first 135 entities included, as in 64 bits) and [9] the view model pointers behind the entity array
@@ -2053,8 +2059,11 @@ static const range_t ranges[] = {
     {0x45e8a4, 0x2c},                // the cgame's view model pointers (2 hands x 0x14)
     {0x983e80, 0xa90c80 - 0x983e80}, // the effects system of local client 0 (FX_InitSystem VA 0x49e390: header VA 0xd83e80 (0xad0), the block 0xd84980 (0x4810), the pools from
                                      // 0xd89200 (0x107a80 bytes)): see the 64-bit range; [native] fxsplit=0 turns it off
+    {0x1af9bc8, 0xbd8},              // the renderer's view of each local client (VA 0x1ef9bd0 + local client * 0x2b8, copied by VA 0x516950) and the camera's visible cell
+                                     // bits (pointer VA 0x1efa6c0, bits 0x1efa6c4, cleared and filled by the portal walk VA 0x516320): see the 64-bit range ([native] viewsplit=0 off)
 };
 #define RANGE_FX 10
+#define RANGE_VIEW 11
 #endif
 #define NRANGES (sizeof(ranges) / sizeof(ranges[0]))
 #define RANGE_RVA(i) XR(ranges[i].rva) // (iw4x-sp: the range's start in the 159 image, the same length)
@@ -2065,6 +2074,30 @@ static int ctx_current;
 // Diagnostics ([native] xswap=<mask>): renderer statics swapped with the contexts too (bit 0: shadow light ring and parameters, 1: the scene frontend globals, 2: the sun shadow cache per view)
 static const struct { unsigned rva, size; } xranges[] = {{0x40d2580, 0x480}, {0x4113400, 0x400}, {0x4359180, 0x200}};
 static uint8_t *x_store[2][3];
+// [native] xswapr=<rva>:<size>,<rva>:<size>,... (diagnostics, up to 24 ranges, hex): more renderer statics swapped with the contexts, to find per-view state
+static struct { unsigned rva, size; uint8_t *store[2]; } xr[24];
+static int xr_n = -1;
+static int xr_render_idle(void)
+{
+	return *(volatile int *)(base + 0x1429b5c) < 1;
+}
+static void xr_parse(void)
+{
+	char v[600];
+	xr_n = 0;
+	GetPrivateProfileStringA("native", "xswapr", "", v, sizeof(v), settings_path);
+	for (char *tok = strtok(v, ","); tok && xr_n < 24; tok = strtok(NULL, ",")) {
+		unsigned rva = 0, size = 0;
+		if (sscanf(tok, "%x:%x", &rva, &size) != 2 || !size || size > 0x200000)
+			continue;
+		xr[xr_n].rva = rva, xr[xr_n].size = size;
+		xr[xr_n].store[0] = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		xr[xr_n].store[1] = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		memcpy(xr[xr_n].store[1], base + rva, size);
+		log_printf("native: xswapr: rva 0x%x, 0x%x bytes swapped per context", rva, size);
+		xr_n++;
+	}
+}
 #endif
 static void ctx_ensure(void)
 {
@@ -2125,6 +2158,10 @@ static void ctx_swap_mask(int to, unsigned mask)
 		if (i == RANGE_FX && !fx_on)
 			continue;
 #endif
+#ifdef RANGE_VIEW
+		if (i == RANGE_VIEW && !CFG_ONCE("viewsplit", 1))
+			continue;
+#endif
 		uint8_t *live = base + RANGE_RVA(i);
 		memcpy(ctx_store[ctx_current][i], live, ranges[i].size);
 		memcpy(live, ctx_store[to][i], ranges[i].size);
@@ -2136,6 +2173,20 @@ static void ctx_swap_mask(int to, unsigned mask)
 				memcpy(x_store[ctx_current][i], base + xranges[i].rva, xranges[i].size);
 				memcpy(base + xranges[i].rva, x_store[to][i], xranges[i].size);
 			}
+	if (mask == CTX_ALL) {
+		if (xr_n < 0)
+			xr_parse();
+		if (xr_n > 0) { // the render thread reads some of these while it draws the last frame: let it finish first (64: frames in flight at rva 0x1429b5c, the wait loop rva 0x301e0)
+			static int (*idle)(void);
+			if (!idle)
+				idle = xr_render_idle;
+			((void (*)(int (*)(void)))(base + 0x301e0))(idle);
+		}
+		for (int i = 0; i < xr_n; i++) {
+			memcpy(xr[i].store[ctx_current], base + xr[i].rva, xr[i].size);
+			memcpy(base + xr[i].rva, xr[i].store[to], xr[i].size);
+		}
+	}
 #endif
 	perf_copy += perf_now() - t0;
 	InterlockedIncrement(&perf_swaps);
@@ -3606,8 +3657,26 @@ static void client_frame_hook(void)
 			on = 0;
 		if (on != split_on)
 			log_printf("native: split view %s", on ? "on" : "off");
-		if (on && !split_on)
+		if (on && !split_on) {
 			split_tick = GetTickCount();
+			// QA: the dvar mw2coop_qa_set ("name value;name value", or | between them) is set when the picture splits: inside the level, where cheat protected dvars take a set
+			// (commands.txt runs before devmap, and a co-op script's GetDvar does not see it)
+			char qs[256];
+			static int qs_done;
+			if (!qs_done && game_dvar_raw("mw2coop_qa_set", qs, sizeof(qs)) && qs[0]) {
+				qs_done = 1;
+				char cmd[300];
+				for (char *tok = strtok(qs, ";|"); tok; tok = strtok(NULL, ";|")) {
+					while (*tok == ' ')
+						tok++;
+					if (!*tok)
+						continue;
+					snprintf(cmd, sizeof(cmd), "set %s\n", tok);
+					game_cbuf_addtext(cmd);
+					log_printf("native: QA set at the split: %s", tok);
+				}
+			}
+		}
 		split_on = on;
 		hud_layout_tick(on); // the console's split screen HUD layout while split, the full screen one otherwise
 	}
@@ -4330,10 +4399,12 @@ static const char *name_get_hook(int client)
 #define P0_TAIL CENT_VALID
 #define P0_TAIL_LEN (CENT_SIZE - CENT_VALID)
 static uint8_t p0_tail[P0_TAIL_LEN];
-static int p0_tail_ok;
+static int p0_tail_ok, p0_tail_on = -1; // (read when the session starts, not on the first call in the middle of the first split frame)
 static void p0_tail_take(const uint8_t *slot)
 {
-	if (CFG_ONCE("p0tail", 1)) {
+	if (p0_tail_on < 0)
+		p0_tail_on = cfg("p0tail", 1);
+	if (p0_tail_on) {
 		memcpy(p0_tail, slot + P0_TAIL, P0_TAIL_LEN);
 		p0_tail_ok = 1;
 	}
@@ -4348,7 +4419,7 @@ static void p0_put(uint8_t *slot)
 	uint8_t saved[CENT_SIZE];
 	memcpy(saved, slot, sizeof(saved));
 	memcpy(slot, p0_ent, sizeof(p0_ent));
-	if (p0_tail_ok && CFG_ONCE("p0tail", 1))
+	if (p0_tail_ok && p0_tail_on > 0)
 		memcpy(slot + P0_TAIL, p0_tail, P0_TAIL_LEN);
 	if (keep & 1)
 		memcpy(slot, saved, P0_HDR);
@@ -4824,9 +4895,10 @@ static void add_entity_hook(int n)
 			lag_fix_yaw(n, 0, sv, &ap); // player 0's body in context 1's picture (his entity sits at index 1 after the swap)
 			add_entity_original(n);
 			lag_unfix_yaw(n, sv, ap);
-			if (p0copy)
+			if (p0copy) { // (braces: without them the slot was "put back" from an unset buffer after every entity, the 32-bit crash in the ragdoll code at the split)
 				p0_tail_take(base + RVA_CENT);
 				memcpy(base + RVA_CENT, slot1_saved, sizeof(slot1_saved));
+			}
 		}
 		*flags = saved;
 		return;
@@ -4983,7 +5055,7 @@ static void ent_clean_hook(void)
 	// The cleanup also carries the effects attached to an entity over to its new DObj (a weapon change makes a new one) or kills them: rva 0x115110 saves the old DObj's models and tags
 	// before the old one is freed, rva 0x1151d0 re-attaches (or kills) afterwards, in the live effects system, which is context 0's. Context 1 has a system of its own (fxsplit) that
 	// never got this: the muzzle flash of a body whose weapon was changed stayed on it for ever in the other half. The same two calls are made for context 1's system.
-	if (native_active && ctx1_ready && ctx_store[1][NRANGES - 1] && CFG_ONCE("fxsplit", 1) && CFG_ONCE("fxentfix", 1)) {
+	if (native_active && ctx1_ready && ctx_store[1][RANGE_FX] && CFG_ONCE("fxsplit", 1) && CFG_ONCE("fxentfix", 1)) {
 		struct {
 			uint8_t buf[528];
 			int ent, flag;
@@ -5771,6 +5843,7 @@ static int activate(int players)
 		return 0;
 	cfg_gen++;
 	mode = cfg("experiment", 10);
+	p0_tail_on = cfg("p0tail", 1);
 #ifndef _WIN64
 	if (mode != 5 && mode != 10)
 		mode = 5; // 32 bits: modes 5 and 10 (the others are experiments of the 64-bit port's history)

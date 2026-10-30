@@ -223,3 +223,11 @@ are wrong or incomplete (see the end).
 - the snapshot lerp fraction (0x51dcb0 in 64).
 - who writes the cgame aspect (0x75f018) and whether `aspect` is also copied into the cgame block that `video_push` pokes (`ctx_store[1][0] + (0x43c640 - ranges[0].rva)`): needs the context ranges of the other package (the aspect lives in 32-bit rva 0x35f018, check that it lies inside the cgame block range there).
 - the exact position of the Material pointer in the inline picture (see above).
+
+### The renderer's view per local client and the visible cell bits (split screen context range)
+- 64: views at rva 0x4812878 + local client * 0x2b8 (read by the scene fill 0x5160), cell bits pointer 0x4813548, bits 0x4813550 (cleared with the world's cell count at
+  world+0x40, filled by the portal walk 0x19760); swapped per context as rva 0x4812878 + 0xdb0.
+- 32: views VA 0x1ef9bd0 + lc * 0x2b8 (slot field at VA 0x1ef9bcc, copied by VA 0x516950; the current view pointer VA 0x1efa6ac; the camera cell VA 0x1ef9cb0 + lc *
+  0x2b8), bits pointer VA 0x1efa6c0, bits VA 0x1efa6c4 (cleared with the cell count at world+0x34 and filled by VA 0x516320); swapped as rva 0x1af9bc8 + 0xbd8.
+- iw4x-sp 1.0.159: every one of these +0x2c90 (tools/map159.py data, 2-8 refs agree): rva 0x1afc858.
+- confidence: verified (64 and 32 shadowcheck frames).

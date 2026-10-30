@@ -8,3 +8,4 @@
 0x331af8 -> 0x334af8    # builtin entry playrumblelooponposition (the empty builtin, found by its name)
 0x331b04 -> 0x334b04    # builtin entry stopallrumbles (the empty builtin, found by its name)
 0xaf719 -> 0x102589    # found by moved-data-address matching before more anchors were added; the iw4x split screen ran with it
+0x1af9bc8 -> 0x1afc858    # the split screen view range (per local client views + visible cell bits): VA 0x1ef9bd0/0x1ef9bcc/0x1efa6c0/0x1efa6c4/0x1ef9cb0 all map +0x2c90 (map159 data, 2-8 refs each agree)

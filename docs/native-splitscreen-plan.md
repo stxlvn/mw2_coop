@@ -415,3 +415,29 @@ warning right of the cross hair. Note: the ammo counter fades out when not used,
 Owner, live: when player 1 aimed with a scope the bottom half went black. The title lines' overlay (`overlay_titles`) lays context 0's layer rows below its half over the
 bottom half while `title_tick` is fresh, and the intro's title elements are still drawn (faded out) long after the lines are gone; the scope's black overlay fills that layer
 below the half too. Reproduced with `[native] qa_ads` on Contingency, gone with `titles=0`; now the overlay is skipped while the top half is scoped (`scope_tick[0]`).
+
+### Static sun shadows followed where the other player looked (2026-10-30, fixed)
+Owner: the camo net over the trainer's grenade box lost its floor shadow in player 2's half when player 1 turned away. QA `set start frag; set mw2coop_qa shadowcheck`
+(player 2 looks at the box, player 1 turns 0/90/180/270/0; frames sh-0..4, bottom half = player 2); a floor brightness metric over the deck in front of player 2 showed it:
+89.5 91.0 100.1 90.6 89.0 (step 2 brighter: the net's shadow gone).
+Cause: R_RenderScene's scene fill (64 rva 0x5160; 32 VA 0x5064b0 and its callees) keeps the renderer's view per local client in statics: 64 rva 0x4812878 + local client
+* 0x2b8 (frustum planes and the sides of the view, copied into the scene), then the camera's visible cell bits (pointer 0x4813548, bits 0x4813550, cleared and filled by the
+portal walk rva 0x19760 each frame); 32: views VA 0x1ef9bd0 + lc * 0x2b8 (copied by VA 0x516950), bits VA 0x1efa6c4 (pointer 0x1efa6c0, portal walk VA 0x516320). Both
+contexts run as local client 0, so both views used one slot, and the sun shadow set-up, which comes before the portal walk, culled its casters with the last frame's
+cells: the other view's. Fix: the range is one more context range (64 rva 0x4812878 + 0xdb0, 32 rva 0x1af9bc8 + 0xbd8, iw4x-sp 0x1afc858 by hand in addr159_manual.txt;
+`[native] viewsplit=0` off). Result 64: 88.8 91.3 92.0 90.5 89.6 (the rest of the spread is Foley walking into the frame); no cost (copies stay ~86 ms/s, 165 engine
+frames/s on the test PC).
+Found by elimination: NOT the cause were sm_fastSunShadow (it picks the list builder 0x33710 or 0x33270 in 0x5160), sm_sunShadowCenter (partitions at a fixed point),
+r_smc_enable 0, sm_strictCull 0, r_smp_worker 0, waiting for the render thread before the frame begin (in-flight count rva 0x1429b5c, "< 2" lets one frame overlap), the
+world's smodel/surface visibility arrays. Then `[native] xswapr=<rva>:<size>,...` (diagnostics: renderer statics swapped per context, after waiting for the render thread,
+which reads some of them while it draws: without the wait it crashed at 0x4e04e / 0x5c255) with twelve ranges from GlobalsOf(0x5160) removed the bug, and halving found
+0x4812878.
+QA trap found on the way: a `set` of a cheat protected dvar in commands.txt runs before `devmap` (cheats off) and is refused silently; `mw2coop_qa_set "name value|name
+value"` is set by the DLL when the picture splits (a co-op script's GetDvar does not see such a dvar).
+
+### The 32-bit split crashed at its start (2026-10-30, fixed)
+Since 6a75b8b (the muzzle flash tail) every 32-bit split session crashed the moment the picture split (ragdoll code VA 0x41d6e0 reading a ragdoll handle out of entity 0's
+pose). Found by building older commits in a git worktree (ce6b1c1 and f15be90 fine, 6a75b8b crashing, also with p0tail=0). Cause: `p0_tail_take()` had been put in as the
+brace-less body of `if (p0copy)` in add_entity_hook, so the following `memcpy(slot 0, slot1_saved)` ran after EVERY entity of context 1's pass and wrote an unset stack
+buffer over player 1's entity. In 64 bits that stack still held the last real copy, so it did not crash, but slot 0 was rewritten after every entity there too. Braces
+restored; the tail setting is now read when the session starts.
